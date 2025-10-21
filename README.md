@@ -1,5 +1,8 @@
-# Agentic Workflow过程设计
-[text](https://hqkygix2uv.feishu.cn/docx/ZRszdUuDBoO9ZexpccLchRoGn0g)
+# 通用多智能体框架
+主题思路：利用知识与工具资源池化，提高多智能体在数据分析等领域的性能。
 
-# 一种平衡agent灵活性和workflow结构化执行的框架
-[text](https://hqkygix2uv.feishu.cn/wiki/P4QnwaWYMiL1xEkchsqcwS0bnUf)
+## Agentic Workflow过程设计
+[详见飞书文档](https://hqkygix2uv.feishu.cn/docx/ZRszdUuDBoO9ZexpccLchRoGn0g)
+
+## 一种平衡agent灵活性和workflow结构化执行的框架
+[详见飞书文档](https://hqkygix2uv.feishu.cn/wiki/P4QnwaWYMiL1xEkchsqcwS0bnUf)
