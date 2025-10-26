@@ -37,3 +37,11 @@ MYSQL_DB = "agent_platform"
 MYSQL_PORT = int(3306)
 # 字符编码（支持emoji）
 MYSQL_CHARSET = "utf8mb4"
+
+# --------------------------
+# 工具池核心配置
+# --------------------------
+# 存储工具元信息的表名
+TABLE_TOOLS_META_INFO = "tools"
+# 存储工具标签的表名
+TABLE_TOOLS_TAGS = "tool_tags"

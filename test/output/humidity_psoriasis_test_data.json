@@ -1,0 +1,162 @@
+{
+  "patients": [
+    {
+      "patient_id": "P001",
+      "date": "2025-01-01",
+      "humidity": 30,
+      "pasi_score": 28.5
+    },
+    {
+      "patient_id": "P001",
+      "date": "2025-01-08",
+      "humidity": 35,
+      "pasi_score": 26.2
+    },
+    {
+      "patient_id": "P001",
+      "date": "2025-01-15",
+      "humidity": 45,
+      "pasi_score": 22.8
+    },
+    {
+      "patient_id": "P001",
+      "date": "2025-01-22",
+      "humidity": 50,
+      "pasi_score": 19.5
+    },
+    {
+      "patient_id": "P001",
+      "date": "2025-01-29",
+      "humidity": 55,
+      "pasi_score": 17.2
+    },
+    {
+      "patient_id": "P002",
+      "date": "2025-01-01",
+      "humidity": 25,
+      "pasi_score": 32.1
+    },
+    {
+      "patient_id": "P002",
+      "date": "2025-01-08",
+      "humidity": 30,
+      "pasi_score": 29.8
+    },
+    {
+      "patient_id": "P002",
+      "date": "2025-01-15",
+      "humidity": 40,
+      "pasi_score": 25.5
+    },
+    {
+      "patient_id": "P002",
+      "date": "2025-01-22",
+      "humidity": 45,
+      "pasi_score": 22.3
+    },
+    {
+      "patient_id": "P002",
+      "date": "2025-01-29",
+      "humidity": 60,
+      "pasi_score": 16.8
+    },
+    {
+      "patient_id": "P003",
+      "date": "2025-01-01",
+      "humidity": 20,
+      "pasi_score": 35.6
+    },
+    {
+      "patient_id": "P003",
+      "date": "2025-01-08",
+      "humidity": 25,
+      "pasi_score": 33.2
+    },
+    {
+      "patient_id": "P003",
+      "date": "2025-01-15",
+      "humidity": 35,
+      "pasi_score": 28.9
+    },
+    {
+      "patient_id": "P003",
+      "date": "2025-01-22",
+      "humidity": 50,
+      "pasi_score": 21.7
+    },
+    {
+      "patient_id": "P003",
+      "date": "2025-01-29",
+      "humidity": 65,
+      "pasi_score": 15.3
+    },
+    {
+      "patient_id": "P004",
+      "date": "2025-01-01",
+      "humidity": 28,
+      "pasi_score": 30.2
+    },
+    {
+      "patient_id": "P004",
+      "date": "2025-01-08",
+      "humidity": 32,
+      "pasi_score": 28.5
+    },
+    {
+      "patient_id": "P004",
+      "date": "2025-01-15",
+      "humidity": 42,
+      "pasi_score": 24.1
+    },
+    {
+      "patient_id": "P004",
+      "date": "2025-01-22",
+      "humidity": 48,
+      "pasi_score": 20.6
+    },
+    {
+      "patient_id": "P004",
+      "date": "2025-01-29",
+      "humidity": 58,
+      "pasi_score": 16.9
+    },
+    {
+      "patient_id": "P005",
+      "date": "2025-01-01",
+      "humidity": 22,
+      "pasi_score": 34.8
+    },
+    {
+      "patient_id": "P005",
+      "date": "2025-01-08",
+      "humidity": 28,
+      "pasi_score": 31.5
+    },
+    {
+      "patient_id": "P005",
+      "date": "2025-01-15",
+      "humidity": 38,
+      "pasi_score": 26.7
+    },
+    {
+      "patient_id": "P005",
+      "date": "2025-01-22",
+      "humidity": 52,
+      "pasi_score": 19.8
+    },
+    {
+      "patient_id": "P005",
+      "date": "2025-01-29",
+      "humidity": 62,
+      "pasi_score": 14.5
+    }
+  ],
+  "metadata": {
+    "study_name": "空气湿度对银屑病影响研究",
+    "observation_period": "2025年1月",
+    "patient_count": 5,
+    "observation_count": 25,
+    "pasi_range": "0-72 (0为无症状，72为最严重)",
+    "humidity_range": "20-65%"
+  }
+}

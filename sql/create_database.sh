@@ -1,1 +1,0 @@
-sudo mysql -u root -p -e "create database agent_platform;"
