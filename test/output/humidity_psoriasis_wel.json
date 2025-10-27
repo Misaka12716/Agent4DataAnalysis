@@ -1,7 +1,7 @@
 {
-  "wel_id": "wel_293b77be2887",
+  "wel_id": "wel_30720b10af48",
   "version": "2.0",
-  "created_at": "2025-10-24T22:25:54.140063",
+  "created_at": "2025-10-27T20:29:46.927631",
   "planner_context": {
     "intent": {
       "type": "data_analysis",
@@ -107,7 +107,7 @@
     },
     "metadata": {},
     "planner_version": "2.0",
-    "planning_timestamp": "2025-10-24T22:25:54.140028"
+    "planning_timestamp": "2025-10-27T20:29:46.927597"
   },
   "scenario": {
     "name": "空气湿度与银屑病相关性分析",
@@ -202,7 +202,7 @@
       },
       "observability": {
         "enable_tracing": true,
-        "trace_id": "trace_d00b82be",
+        "trace_id": "trace_1b652cef",
         "span_id": null,
         "enable_metrics": true,
         "metric_tags": {
@@ -293,7 +293,7 @@
       },
       "observability": {
         "enable_tracing": true,
-        "trace_id": "trace_81f72aba",
+        "trace_id": "trace_2cd179f8",
         "span_id": null,
         "enable_metrics": true,
         "metric_tags": {
@@ -377,7 +377,7 @@
       },
       "observability": {
         "enable_tracing": true,
-        "trace_id": "trace_f22f1120",
+        "trace_id": "trace_691b324d",
         "span_id": null,
         "enable_metrics": true,
         "metric_tags": {
@@ -469,7 +469,7 @@
       },
       "observability": {
         "enable_tracing": true,
-        "trace_id": "trace_9b0780fe",
+        "trace_id": "trace_6118a0e7",
         "span_id": null,
         "enable_metrics": true,
         "metric_tags": {
@@ -557,7 +557,7 @@
       },
       "observability": {
         "enable_tracing": true,
-        "trace_id": "trace_3ee7a401",
+        "trace_id": "trace_c7964f60",
         "span_id": null,
         "enable_metrics": true,
         "metric_tags": {
@@ -642,7 +642,7 @@
       },
       "observability": {
         "enable_tracing": true,
-        "trace_id": "trace_7bc8d5a2",
+        "trace_id": "trace_6ebf8e6c",
         "span_id": null,
         "enable_metrics": true,
         "metric_tags": {
@@ -737,7 +737,7 @@
       },
       "observability": {
         "enable_tracing": true,
-        "trace_id": "trace_d19081b0",
+        "trace_id": "trace_b6888a15",
         "span_id": null,
         "enable_metrics": true,
         "metric_tags": {
@@ -823,7 +823,7 @@
       },
       "observability": {
         "enable_tracing": true,
-        "trace_id": "trace_c55eca82",
+        "trace_id": "trace_e0374be1",
         "span_id": null,
         "enable_metrics": true,
         "metric_tags": {
@@ -946,7 +946,7 @@
       },
       "observability": {
         "enable_tracing": true,
-        "trace_id": "trace_57a15044",
+        "trace_id": "trace_e468669d",
         "span_id": null,
         "enable_metrics": true,
         "metric_tags": {
@@ -1016,7 +1016,7 @@
       {
         "from_state": "created",
         "to_state": "validated",
-        "timestamp": "2025-10-24T22:25:54.140440",
+        "timestamp": "2025-10-27T20:29:46.928043",
         "reason": "WEL 文档生成完成"
       }
     ],

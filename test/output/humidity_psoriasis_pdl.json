@@ -1,7 +1,7 @@
 {
-  "pdl_id": "pdl_wel_293b77be2887",
+  "pdl_id": "pdl_wel_30720b10af48",
   "version": "2.0",
-  "created_at": "2025-10-24T22:25:54.140063",
+  "created_at": "2025-10-27T20:29:46.927631",
   "scenario": "空气湿度与银屑病相关性分析",
   "goal": "通过统计分析确定空气湿度与银屑病严重程度的相关关系",
   "steps": [
@@ -335,9 +335,9 @@
       "dependencies": [
         "action_7",
         "action_8",
-        "action_4",
         "action_5",
-        "action_6"
+        "action_6",
+        "action_4"
       ],
       "input_mapping": {
         "input_from_4": "action_4.output",

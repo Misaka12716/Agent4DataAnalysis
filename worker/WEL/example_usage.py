@@ -7,7 +7,7 @@ import asyncio
 import json
 
 # 从 WEL 包导入所需组件
-from WEL import (
+from WEL import (  # pyright: ignore[reportMissingImports]
     WELGenerator,
     IntentType,
     ActionType,
