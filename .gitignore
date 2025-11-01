@@ -1,5 +1,8 @@
 __pycache__/
+.vscode/
 logs/
 input
+temp_load
+
 test
-worker/WEL
+WEL

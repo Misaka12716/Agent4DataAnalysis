@@ -77,7 +77,7 @@ def _generate_session_id() -> str:
 
 def parse_model_output(raw_content: str) -> tuple[str, str]:
     parts = raw_content.split("</think>", 1)
-    if len(parts) == 2 and parts[0].strip().startswith("</think>"):
+    if len(parts) == 2 and parts[0].strip().startswith("<think>"):
         thinking = parts[0].strip()[7:].strip()
         content = parts[1].strip()
         return thinking, content
@@ -235,9 +235,18 @@ async def ai_response(
 
 
 # -------------------------- Multi-turn Conversation Interface --------------------------
-def new_chat_session() -> str:
+def new_chat_session(system_prompt: str | None = None) -> str:
     session_id = _generate_session_id()
-    _chat_sessions[session_id] = []
+    if system_prompt:
+        _chat_sessions[session_id] = [
+            {
+                "role": "system",
+                "content": system_prompt,
+            }
+        ]
+    else:
+        _chat_sessions[session_id] = []
+
     if _save_sessions(_chat_sessions):
         print(
             f"New chat session created successfully, ID: {session_id} (saved to file)"
@@ -363,3 +372,41 @@ async def ai_chat(
             "error": str(e),
             "success": False,
         }
+
+
+# -------------------------- Session Closure Interface --------------------------
+def close_chat_session(session_id: str) -> dict:
+    """
+    Close the specified chat session (delete session data from memory and file)
+    :param session_id: ID of the session to be closed
+    :return: Operation result dictionary containing success status and prompt information
+    """
+    global _chat_sessions
+    # 1. Check if the session exists
+    if session_id not in _chat_sessions:
+        error_msg = f"Session does not exist: {session_id}"
+        print(f"[Session Management] {error_msg}")
+        return {"success": False, "error": error_msg}
+
+    try:
+        # 2. Delete the session from memory
+        del _chat_sessions[session_id]
+        print(f"[Session Management] Session deleted from memory: {session_id}")
+
+        # 3. Synchronize updates to file storage (lock to ensure thread safety)
+        save_success = _save_sessions(_chat_sessions)
+        if save_success:
+            print(f"[Session Management] Session deleted from file: {session_id}")
+            return {
+                "success": True,
+                "message": f"Session {session_id} closed successfully",
+            }
+        else:
+            error_msg = f"Session {session_id} deleted from memory successfully, but file update failed"
+            print(f"[Session Management] {error_msg}")
+            return {"success": False, "error": error_msg}
+
+    except Exception as e:
+        error_msg = f"Failed to close session {session_id}: {str(e)}"
+        print(f"[Session Management] {error_msg}")
+        return {"success": False, "error": error_msg}

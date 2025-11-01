@@ -16,7 +16,6 @@ class ToolsManager:
     # ------------------------------
     # 一、工具池管理（元信息CRUD）
     # ------------------------------
-
     def add_tool(
         self,
         tool_id: str,
@@ -105,6 +104,43 @@ class ToolsManager:
 
         return tool_info, None
 
+    def list_all_tools(self) -> Tuple[Optional[List[Dict]], Optional[str]]:
+        """
+        列出所有工具的完整信息（含元信息和标签）
+        :return: (工具信息列表, 错误信息)；列表中每个元素为单个工具的完整信息（同get_tool返回格式）
+        """
+        try:
+            # 1. 查询所有工具的元信息（使用配置的元信息表）
+            sql = f"SELECT * FROM {TABLE_TOOLS_META_INFO}"
+            result, error = self.db_handler.query(sql)
+            if error:
+                return None, f"查询所有工具元信息失败：{error}"
+            if not result:
+                return [], None  # 无工具时返回空列表
+
+            all_tools = []
+            # 2. 逐个处理工具信息（反序列化参数+关联标签）
+            for tool_info in result:
+                # 反序列化输入/输出参数（JSON转字典）
+                tool_info["input_params"] = json.loads(tool_info["input_params"])
+                tool_info["output_params"] = json.loads(tool_info["output_params"])
+
+                # 获取当前工具的标签（调用已有方法）
+                tool_id = tool_info["id"]
+                tags, tag_error = self.get_tags_of_tool(tool_id)
+                if tag_error:
+                    # 标签查询失败不中断整体流程，仅在工具信息中标记Warning
+                    tool_info["tags"] = []
+                    tool_info["tag_warning"] = f"标签查询失败：{tag_error}"
+                else:
+                    tool_info["tags"] = tags
+
+                all_tools.append(tool_info)
+
+            return all_tools, None
+        except Exception as e:
+            return None, f"获取所有工具信息异常：{str(e)}"
+
     def update_tool(
         self,
         tool_id: str,
@@ -191,7 +227,6 @@ class ToolsManager:
     # ------------------------------
     # 二、标签索引管理（标签与工具映射）
     # ------------------------------
-
     def add_tags_to_tool(
         self, tool_id: str, tags: List[str]
     ) -> Tuple[bool, Optional[str]]:
@@ -470,21 +505,37 @@ if __name__ == "__main__":
     tool_manager = ToolsManager()
     json_file_path = "./tools_info.json"
     try:
-        print(f"开始从 {json_file_path} 批量导入工具...")
-        # 3. 调用类内部的批量导入方法
-        import_result = tool_manager.batch_import_from_json(json_file_path)
+        # print(f"开始从 {json_file_path} 批量导入工具...")
+        # # 3. 调用类内部的批量导入方法
+        # import_result = tool_manager.batch_import_from_json(json_file_path)
 
-        # 4. 打印导入统计结果
-        print("\n===== 批量导入结果 =====")
-        print(f"总工具数：{import_result['total']}")
-        print(f"成功导入：{import_result['success']}")
-        print(f"导入失败：{import_result['failed']}")
+        # # 4. 打印导入统计结果
+        # print("\n===== 批量导入结果 =====")
+        # print(f"总工具数：{import_result['total']}")
+        # print(f"成功导入：{import_result['success']}")
+        # print(f"导入失败：{import_result['failed']}")
 
-        # 5. 打印失败详情（若有）
-        if import_result["fail_details"]:
-            print("\n失败详情：")
-            for idx, detail in enumerate(import_result["fail_details"], 1):
-                print(f"  {idx}. 工具ID {detail['tool_id']}：{detail['reason']}")
+        # # 5. 打印失败详情（若有）
+        # if import_result["fail_details"]:
+        #     print("\n失败详情：")
+        #     for idx, detail in enumerate(import_result["fail_details"], 1):
+        #         print(f"  {idx}. 工具ID {detail['tool_id']}：{detail['reason']}")
+
+        # 6. 测试新增的list_all_tools函数
+        print("\n===== 测试列出所有工具 =====")
+        all_tools, list_error = tool_manager.list_all_tools()
+        if list_error:
+            print(f"列出所有工具失败：{list_error}")
+        else:
+            print(f"当前工具池共有 {len(all_tools)} 个工具")
+            for idx, tool in enumerate(all_tools, 1):
+                print(f"\n{idx}. 工具ID：{tool['id']}")
+                print(f"   工具名称：{tool['name']}")
+                print(f"   简要描述：{tool['brief_desc']}")
+                print(f"   接口路径：{tool['api_path']}")
+                print(f"   标签：{tool['tags']}")
+                if "tag_warning" in tool:
+                    print(f"   Warning：{tool['tag_warning']}")
 
     except Exception as e:
         print(f"批量导入过程出错：{str(e)}")

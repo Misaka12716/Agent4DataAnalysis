@@ -4,7 +4,7 @@ from typing import List
 # --------------------------
 # 通用路径配置
 # --------------------------
-PATH = "/data/agent_platform"  # 文件夹的固定位置
+PATH = "/data/agent_platform/src"  # 文件夹的固定位置
 
 # --------------------------
 # 模型相关配置
@@ -15,6 +15,7 @@ SUPPORTED_MODELS: List[str] = [
     "qwen3:4b",
 ]  # 支持的模型列表
 DEFAULT_MODEL = "qwen3:8b"  # 默认使用的模型
+LANGUAGE = "zh"  # 使用的语言(zn/en)
 
 # --------------------------
 # API 相关配置

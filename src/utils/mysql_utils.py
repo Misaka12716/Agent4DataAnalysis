@@ -43,7 +43,7 @@ class MySQLHandler:
         self.cursor: Optional[pymysql.cursors.Cursor] = None
         self._connect()  # 初始化时建立连接
 
-        # 检查并创建必要的表（tools和tool_tags）
+        # 检查并创建必要的表（tools）
         self._check_and_create_tables()
 
     def _connect(self) -> None:
@@ -180,24 +180,24 @@ class MySQLHandler:
         else:
             print(f"已存在工具元信息表{TABLE_TOOLS_META_INFO}")
 
-        # 2. 创建tool_tags表（工具-标签多对多索引表）
-        if not self._check_table_exists(TABLE_TOOLS_TAGS):
-            create_tags_sql = f"""
-            CREATE TABLE {TABLE_TOOLS_TAGS} (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                tool_id VARCHAR(64) NOT NULL COMMENT '工具ID（关联tools.id）',
-                tag VARCHAR(64) NOT NULL COMMENT '标签内容',
-                FOREIGN KEY (tool_id) REFERENCES {TABLE_TOOLS_META_INFO}(id) ON DELETE CASCADE,
-                UNIQUE KEY uk_tool_tag (tool_id, tag) COMMENT '避免同一工具重复添加同一标签'
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '工具-标签索引表';
-            """
-            affected, error = self.execute(create_tags_sql)
-            if error:
-                print(f"创建工具标签表{TABLE_TOOLS_TAGS}失败: {error}")
-            else:
-                print(f"工具标签表{TABLE_TOOLS_TAGS}创建成功")
-        else:
-            print(f"已存在工具标签表{TABLE_TOOLS_TAGS}")
+        # # 2. 创建tool_tags表（工具-标签多对多索引表）
+        # if not self._check_table_exists(TABLE_TOOLS_TAGS):
+        #     create_tags_sql = f"""
+        #     CREATE TABLE {TABLE_TOOLS_TAGS} (
+        #         id INT AUTO_INCREMENT PRIMARY KEY,
+        #         tool_id VARCHAR(64) NOT NULL COMMENT '工具ID（关联tools.id）',
+        #         tag VARCHAR(64) NOT NULL COMMENT '标签内容',
+        #         FOREIGN KEY (tool_id) REFERENCES {TABLE_TOOLS_META_INFO}(id) ON DELETE CASCADE,
+        #         UNIQUE KEY uk_tool_tag (tool_id, tag) COMMENT '避免同一工具重复添加同一标签'
+        #     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '工具-标签索引表';
+        #     """
+        #     affected, error = self.execute(create_tags_sql)
+        #     if error:
+        #         print(f"创建工具标签表{TABLE_TOOLS_TAGS}失败: {error}")
+        #     else:
+        #         print(f"工具标签表{TABLE_TOOLS_TAGS}创建成功")
+        # else:
+        #     print(f"已存在工具标签表{TABLE_TOOLS_TAGS}")
 
 
 mysql_handler = MySQLHandler(
