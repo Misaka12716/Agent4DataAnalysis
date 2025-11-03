@@ -109,7 +109,7 @@ class MultiAgentPlanner(BasePlanner):
         llm_result = await ai_response(
             prompt=prompt.strip(),
             session=self.http_session,
-            need_thinking=True,  # Record LLM thinking process (for traceability)
+            need_thinking=True,
         )
 
         # Process result: parse JSON + error capture

@@ -24,10 +24,10 @@ OPENAI_COMPATIBLE_API_BASE = "http://localhost:11434/v1"  # 兼容OpenAI的API�
 API_KEY = ""  # API访问密钥（为空时可能表示无需密钥）
 
 # --------------------------
-# 数据库连接配置（核心参数）
+# MYSQL连接配置（核心参数）
 # --------------------------
-# 数据库主机地址（优先从环境变量读取，默认localhost）
-MYSQL_HOST = "localhost"
+# MYSQL主机地址（优先从环境变量读取，默认localhost）
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 # 数据库用户名（默认root）
 MYSQL_USER = "root"
 # 数据库密码
@@ -35,9 +35,24 @@ MYSQL_PASSWORD = "pku123"
 # 数据库名称
 MYSQL_DB = "agent_platform"
 # 数据库端口（默认3306）
-MYSQL_PORT = int(3306)
+# MYSQL端口（优先从环境变量读取，默认3306）
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", 3306))
 # 字符编码（支持emoji）
 MYSQL_CHARSET = "utf8mb4"
+
+# --------------------------
+# neo4j连接配置（核心参数）
+# --------------------------
+# neo4j主机地址（优先从环境变量读取，默认localhost）
+NEO4J_HOST = os.getenv("NEO4J_HOST", "localhost")
+# neo4j用户名（默认neo4j）
+NEO4J_USER = "neo4j"
+# neo4j密码
+NEO4J_PASSWORD = "pku12345"
+# neo4j数据库名称（默认neo4j）
+NEO4J_DB = "neo4j"
+# neo4j端口（默认7687）
+NEO4J_PORT = int(os.getenv("NEO4J_PORT", 7687))
 
 # --------------------------
 # 工具池核心配置

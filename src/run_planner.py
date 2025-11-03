@@ -1,8 +1,8 @@
 # run_planner.py
 import asyncio
 from aiohttp import ClientSession
-from knowledge.knowledge_base import KnowledgeBase
-from planner.multi_agent_planner import MultiAgentPlanner
+from src.knowledge.knowledge_base import KnowledgeBase
+from src.planner.multi_agent_planner import MultiAgentPlanner
 from typing import Dict, Any, Optional, Callable
 
 
@@ -152,9 +152,7 @@ async def run_planner_flow(
 # -------------------------- 示例调用 --------------------------
 async def main():
     # 待处理的用户需求
-    input_requirement = (
-        "分析2024年第一季度用户消费数据，生成可视化报告并提取关键消费趋势"
-    )
+    input_requirement = input("请输入需求：")
 
     # 执行规划器流程
     planner_result = await run_planner_flow(input_requirement)

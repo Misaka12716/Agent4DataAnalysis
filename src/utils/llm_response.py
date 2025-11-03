@@ -13,7 +13,7 @@ from utils.config import (
 )
 
 # -------------------------- Configuration Parameters --------------------------
-SESSIONS_FILE_PATH = f"{PATH}/utils/chat_sessions.json"
+SESSIONS_FILE_PATH = f"{PATH}/logs/chat_sessions.json"
 SESSIONS_LOCK_PATH = f"{SESSIONS_FILE_PATH}.lock"
 _chat_sessions = {}
 
