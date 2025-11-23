@@ -1,8 +1,10 @@
 __pycache__/
 .vscode/
 logs/
+tmp/
 input
 temp_load
+uploads
 
 test
 WEL

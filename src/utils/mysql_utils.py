@@ -1,3 +1,6 @@
+# mysql_utils.py
+# MySQL数据库操作封装，提供连接管理和基本CRUD功能
+
 import pymysql  # pyright: ignore[reportMissingModuleSource]
 from pymysql.cursors import DictCursor  # pyright: ignore[reportMissingModuleSource]
 from typing import List, Dict, Optional, Tuple

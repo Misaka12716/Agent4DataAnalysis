@@ -1,1 +1,1 @@
-python -u srx/run_planner.py
+cd src && python -u run_planner.py

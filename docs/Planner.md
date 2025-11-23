@@ -15,7 +15,7 @@ Planner 负责根据用户输入的目标或任务，自动生成多智能体协
 4. 支持计划的动态调整与回溯。
 
 ## 典型用法
-详见[src/run_planner.py](./src/run_planner.py)
+详见[src/run_planner.py](../src/run_planner.py)
 
 ## 相关配置
 - 支持自定义计划生成策略

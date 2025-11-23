@@ -1,3 +1,6 @@
+# llm_response.py
+# 处理与大语言模型交互的响应，包括单轮和多轮对话
+
 import json
 import uuid
 import os
@@ -153,6 +156,7 @@ async def _call_openai_compatible_api(
 
 
 # -------------------------- Single-turn Conversation Interface --------------------------
+# llm_response.py - ai_response 函数
 async def ai_response(
     prompt: str,
     session: ClientSession,
@@ -174,48 +178,47 @@ async def ai_response(
             request_data["messages"][0]["images"] = images
 
         if stream:
-
-            async def stream_generator():
-                full_content = ""
-                async for chunk in _call_openai_compatible_api_stream(
-                    session, request_data
-                ):
-                    if "choices" in chunk and chunk["choices"]:
-                        delta = chunk["choices"][0].get("delta", {})
-                        if "content" in delta and delta["content"]:
-                            full_content += delta["content"]
-                            yield {
-                                "type": "chunk",
-                                "content": delta["content"],
-                                "model": selected_model,
-                                "success": True,
-                            }
-                thinking, content = parse_model_output(full_content)
-                yield {
-                    "type": "complete",
-                    "thinking": thinking,
-                    "content": content,
-                    "model": selected_model,
-                    "success": True,
-                }
-
-            return stream_generator()
+            # 流式模式：逐块yield
+            full_content = ""
+            async for chunk in _call_openai_compatible_api_stream(
+                session, request_data
+            ):
+                if "choices" in chunk and chunk["choices"]:
+                    delta = chunk["choices"][0].get("delta", {})
+                    if "content" in delta and delta["content"]:
+                        full_content += delta["content"]
+                        yield {
+                            "type": "chunk",
+                            "content": delta["content"],
+                            "model": selected_model,
+                            "success": True,
+                        }
+            thinking, content = parse_model_output(full_content)
+            yield {
+                "type": "complete",
+                "thinking": thinking,
+                "content": content,
+                "model": selected_model,
+                "success": True,
+            }
         else:
+            # 非流式模式：yield最终结果
             response = await _call_openai_compatible_api(session, request_data)
             if "choices" in response and response["choices"]:
                 full_content = (
                     response["choices"][0].get("message", {}).get("content", "")
                 )
                 thinking, content = parse_model_output(full_content)
-                return {
+                yield {
+                    "type": "result",
                     "thinking": thinking,
                     "content": content,
                     "model": selected_model,
                     "success": True,
                 }
             else:
-                return {
-                    "thinking": "",
+                yield {
+                    "type": "error",
                     "content": "No valid response received",
                     "model": selected_model,
                     "error": "Abnormal API return format",
@@ -225,8 +228,8 @@ async def ai_response(
     except Exception as e:
         error_msg = f"Single-turn conversation error: {str(e)}"
         print(f"{datetime.now()} {error_msg}")
-        return {
-            "thinking": "",
+        yield {
+            "type": "error",
             "content": f"Processing failed: {str(e)}",
             "model": selected_model,
             "error": str(e),
@@ -262,6 +265,7 @@ def get_chat_history(session_id: str) -> list:
     return _chat_sessions.get(session_id, [])
 
 
+# llm_response.py - ai_chat 函数
 async def ai_chat(
     session_id: str,
     prompt: str,
@@ -272,21 +276,24 @@ async def ai_chat(
     need_thinking: bool = False,
 ):
     if session_id not in _chat_sessions:
-        return {"error": f"Session does not exist: {session_id}", "success": False}
+        yield {
+            "type": "error",
+            "session_id": session_id,
+            "message": f"Session does not exist: {session_id}",
+            "success": False,
+        }
+        return  # 空return终止生成器
 
     selected_model = model_name if model_name in SUPPORTED_MODELS else DEFAULT_MODEL
     try:
-        # Construct user message
         user_content = prompt if need_thinking else f"{prompt}/no_think"
         user_message = {"role": "user", "content": user_content}
         if images and len(images) > 0:
             user_message["images"] = images
 
-        # Load conversation history
         chat_history = _chat_sessions[session_id].copy()
         chat_history.append(user_message)
 
-        # Construct API request
         request_data = {
             "model": selected_model,
             "messages": chat_history,
@@ -294,57 +301,52 @@ async def ai_chat(
         }
 
         if stream:
+            # 流式模式：逐块yield
+            full_content = ""
+            async for chunk in _call_openai_compatible_api_stream(
+                http_session, request_data
+            ):
+                if "choices" in chunk and chunk["choices"]:
+                    delta = chunk["choices"][0].get("delta", {})
+                    if "content" in delta and delta["content"]:
+                        full_content += delta["content"]
+                        yield {
+                            "type": "chunk",
+                            "session_id": session_id,
+                            "content": delta["content"],
+                            "model": selected_model,
+                            "success": True,
+                        }
 
-            async def stream_generator():
-                full_content = ""
-                async for chunk in _call_openai_compatible_api_stream(
-                    http_session, request_data
-                ):
-                    if "choices" in chunk and chunk["choices"]:
-                        delta = chunk["choices"][0].get("delta", {})
-                        if "content" in delta and delta["content"]:
-                            full_content += delta["content"]
-                            yield {
-                                "type": "chunk",
-                                "session_id": session_id,
-                                "content": delta["content"],
-                                "model": selected_model,
-                                "success": True,
-                            }
+            thinking, content = parse_model_output(full_content)
+            assistant_message = {"role": "assistant", "content": content}
+            _chat_sessions[session_id].append(user_message)
+            _chat_sessions[session_id].append(assistant_message)
+            _save_sessions(_chat_sessions)
 
-                # Stream ends: update conversation history
-                thinking, content = parse_model_output(full_content)
-                assistant_message = {"role": "assistant", "content": content}
-                _chat_sessions[session_id].append(user_message)
-                _chat_sessions[session_id].append(assistant_message)
-                _save_sessions(_chat_sessions)
-
-                yield {
-                    "type": "complete",
-                    "session_id": session_id,
-                    "thinking": thinking,
-                    "content": content,
-                    "model": selected_model,
-                    "history_length": len(_chat_sessions[session_id]),
-                    "success": True,
-                }
-
-            return stream_generator()
+            yield {
+                "type": "complete",
+                "session_id": session_id,
+                "thinking": thinking,
+                "content": content,
+                "model": selected_model,
+                "history_length": len(_chat_sessions[session_id]),
+                "success": True,
+            }
         else:
+            # 非流式模式：yield最终结果
             response = await _call_openai_compatible_api(http_session, request_data)
             if "choices" in response and response["choices"]:
                 full_content = (
                     response["choices"][0].get("message", {}).get("content", "")
                 )
                 thinking, content = parse_model_output(full_content)
-
-                # Update conversation history
                 assistant_message = {"role": "assistant", "content": content}
                 _chat_sessions[session_id].append(user_message)
                 _chat_sessions[session_id].append(assistant_message)
                 _save_sessions(_chat_sessions)
-
-                return {
+                yield {
+                    "type": "result",
                     "session_id": session_id,
                     "thinking": thinking,
                     "content": content,
@@ -353,9 +355,9 @@ async def ai_chat(
                     "success": True,
                 }
             else:
-                return {
+                yield {
+                    "type": "error",
                     "session_id": session_id,
-                    "thinking": "",
                     "content": "No valid response received",
                     "model": selected_model,
                     "error": "Abnormal API return format",
@@ -365,9 +367,9 @@ async def ai_chat(
     except Exception as e:
         error_msg = f"Multi-turn conversation error [{session_id}]: {str(e)}"
         print(f"{datetime.now()} {error_msg}")
-        return {
+        yield {
+            "type": "error",
             "session_id": session_id,
-            "thinking": "",
             "content": f"Conversation processing failed: {str(e)}",
             "error": str(e),
             "success": False,

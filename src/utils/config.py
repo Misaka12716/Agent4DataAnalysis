@@ -5,6 +5,9 @@ from typing import List
 # 通用路径配置
 # --------------------------
 PATH = "/data/agent_platform/src"  # 文件夹的固定位置
+TEMP_FOLDER = "/data/agent_platform/tmp/"  # 临时文件存储路径
+UPLOAD_FOLDER = os.path.join(TEMP_FOLDER, "uploads/")  # 上传文件存储路径
+DOWNLOAD_FOLDER = os.path.join(TEMP_FOLDER, "downloads/")  # 下载文件存储路径
 
 # --------------------------
 # 模型相关配置

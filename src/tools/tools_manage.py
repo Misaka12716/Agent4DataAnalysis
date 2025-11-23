@@ -1,3 +1,6 @@
+# tools_manage.py
+# 工具管理器，负责工具的元信息CRUD及标签索引管理
+
 from typing import List, Dict, Optional, Tuple
 import json
 from utils.mysql_utils import mysql_handler

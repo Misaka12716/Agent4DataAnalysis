@@ -1,3 +1,6 @@
+# tools_category_manager.py
+# 工具分类管理器，用于处理工具的大类和亚类信息
+
 import json
 import os
 from utils.config import PATH
