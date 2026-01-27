@@ -26,6 +26,17 @@ class ToolsCategoryManager:
             )
         )
 
+        # ========== 核心优化：初始化时构建映射字典，仅执行一次 ==========
+        # 构建大类中文 -> 英文的映射字典（实例属性）
+        self.main_cate_map = {
+            item["一级目录中文"]: item["一级目录英文"] for item in self.categories
+        }
+        # 构建亚类中文 -> 英文的映射字典（实例属性）
+        self.sub_cate_map = {}
+        for main_item in self.categories:
+            for sub_item in main_item["二级目录"]:
+                self.sub_cate_map[sub_item["二级目录中文"]] = sub_item["二级目录英文"]
+
     def get_main_categories(self):
         """获取所有工具大类（一级目录）"""
         return [
@@ -77,13 +88,19 @@ class ToolsCategoryManager:
             sub_category: 可选，指定亚类中文名称，若提供则只返回该亚类下的工具
                           若不提供则返回所有工具
         """
+        # 直接使用初始化时构建的映射字典，无需重复构建
+        main_category_en = (
+            self.main_cate_map.get(main_category) if main_category else None
+        )
+        sub_category_en = self.sub_cate_map.get(sub_category) if sub_category else None
+
         tools = []
         for tool in self.tools_info:
-            # main_category对应type字段
-            if main_category and tool.get("type") != main_category:
+            # 匹配大类（type字段为英文）
+            if main_category_en and tool.get("type") != main_category_en:
                 continue
-            # sub_category对应subtype字段
-            if sub_category and tool.get("subtype") != sub_category:
+            # 匹配亚类（subtype字段为英文）
+            if sub_category_en and tool.get("subtype") != sub_category_en:
                 continue
             tools.append(tool)
         return tools
@@ -105,7 +122,15 @@ if __name__ == "__main__":
             f"{sub['main_category_chinese']} -> {sub['sub_category_chinese']} ({sub['sub_category_english']})"
         )
 
-    # 获取指定大类下的亚类（例如"代谢处理"）
-    print("\n代谢处理下的亚类：")
-    for sub in manager.get_sub_categories(main_category="代谢处理"):
+    # 获取指定大类下的亚类（例如"通用表型处理"）
+    print("\n通用表型处理下的亚类：")
+    for sub in manager.get_sub_categories(main_category="通用表型处理"):
         print(f"{sub['sub_category_chinese']} ({sub['sub_category_english']})")
+
+    # 新增示例：获取指定大类（中文）下的工具
+    print("\n通用表型处理大类下的所有工具：")
+    generic_tools = manager.get_tools_from_category(main_category="通用表型处理")
+    for tool in generic_tools:
+        print(
+            f"工具名称：{tool.get('name')}，类型：{tool.get('type')}，亚类：{tool.get('subtype')}"
+        )

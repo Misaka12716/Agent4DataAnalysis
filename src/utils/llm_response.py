@@ -1,6 +1,5 @@
 # llm_response.py
 # 处理与大语言模型交互的响应，包括单轮和多轮对话
-
 import json
 import uuid
 import os
@@ -15,13 +14,17 @@ from utils.config import (
     API_KEY,
 )
 
-# -------------------------- Configuration Parameters --------------------------
+# -------------------------- 全局控制宏（核心新增） --------------------------
+# 便捷宏：控制是否跳过思考内容的输出（True=跳过思考内容，False=保留思考内容）
+# 修改此值即可全局控制是否过滤<think>...</think>部分
+SKIP_THINKING = False
+
+# -------------------------- 原有代码不变部分 --------------------------
 SESSIONS_FILE_PATH = f"{PATH}/logs/chat_sessions.json"
 SESSIONS_LOCK_PATH = f"{SESSIONS_FILE_PATH}.lock"
 _chat_sessions = {}
 
 
-# -------------------------- Utility Functions (File I/O) --------------------------
 def _load_sessions() -> dict:
     lock = FileLock(SESSIONS_LOCK_PATH)
     with lock:
@@ -31,12 +34,10 @@ def _load_sessions() -> dict:
                     f"Session file does not exist, initializing empty sessions: {SESSIONS_FILE_PATH}"
                 )
                 return {}
-
             with open(SESSIONS_FILE_PATH, "r", encoding="utf-8") as f:
                 sessions = json.load(f)
             print(f"Successfully loaded {len(sessions)} historical sessions")
             return sessions
-
         except json.JSONDecodeError:
             print(
                 f"Session file format error, resetting to empty sessions: {SESSIONS_FILE_PATH}"
@@ -46,7 +47,6 @@ def _load_sessions() -> dict:
                 os.rename(SESSIONS_FILE_PATH, backup_path)
                 print(f"Corrupted file backed up to: {backup_path}")
             return {}
-
         except IOError as e:
             print(f"Failed to load session file: {str(e)}, using empty sessions")
             return {}
@@ -59,21 +59,17 @@ def _save_sessions(sessions: dict) -> bool:
             parent_dir = os.path.dirname(SESSIONS_FILE_PATH)
             if parent_dir and not os.path.exists(parent_dir):
                 os.makedirs(parent_dir, exist_ok=True)
-
             with open(SESSIONS_FILE_PATH, "w", encoding="utf-8") as f:
                 json.dump(sessions, f, ensure_ascii=False, indent=2)
             return True
-
         except IOError as e:
             print(f"Failed to save session file: {str(e)}")
             return False
 
 
-# -------------------------- Module Initialization: Load Historical Sessions --------------------------
 _chat_sessions = _load_sessions()
 
 
-# -------------------------- Basic Session Operations --------------------------
 def _generate_session_id() -> str:
     return str(uuid.uuid4())
 
@@ -87,39 +83,32 @@ def parse_model_output(raw_content: str) -> tuple[str, str]:
     return "", raw_content.strip()
 
 
-# -------------------------- API Call Utility Functions --------------------------
 async def _call_openai_compatible_api_stream(
     session: ClientSession, request_data: dict
 ):
     api_url = f"{OPENAI_COMPATIBLE_API_BASE}/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}
-
     async with session.post(
         url=api_url, headers=headers, data=json.dumps(request_data)
     ) as response:
         if not response.ok:
             error_text = await response.text()
             raise ValueError(f"API request failed [{response.status}]: {error_text}")
-
         buffer = b""
         async for chunk_bytes, _ in response.content.iter_chunks():
             if not chunk_bytes:
                 continue
-
             buffer += chunk_bytes
             lines = buffer.split(b"\n")
-
             for line_bytes in lines[:-1]:
                 line_bytes = line_bytes.strip()
                 if not line_bytes:
                     continue
-
                 try:
                     line = line_bytes.decode("utf-8").lstrip("data: ")
                 except UnicodeDecodeError:
                     print(f"Ignoring undecodable bytes: {line_bytes[:50]}...")
                     continue
-
                 if line == "[DONE]":
                     return
                 try:
@@ -127,9 +116,7 @@ async def _call_openai_compatible_api_stream(
                 except json.JSONDecodeError:
                     print(f"Ignoring invalid JSON data: {line[:50]}...")
                     continue
-
             buffer = lines[-1]
-
         if buffer.strip():
             try:
                 line = buffer.decode("utf-8").lstrip("data: ")
@@ -144,19 +131,16 @@ async def _call_openai_compatible_api(
 ) -> dict:
     api_url = f"{OPENAI_COMPATIBLE_API_BASE}/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}
-
     async with session.post(
         url=api_url, headers=headers, data=json.dumps(request_data)
     ) as response:
         if not response.ok:
             error_text = await response.text()
             raise ValueError(f"API request failed [{response.status}]: {error_text}")
-
         return await response.json()
 
 
-# -------------------------- Single-turn Conversation Interface --------------------------
-# llm_response.py - ai_response 函数
+# -------------------------- 单轮对话接口（简化流式过滤） --------------------------
 async def ai_response(
     prompt: str,
     session: ClientSession,
@@ -173,26 +157,47 @@ async def ai_response(
             "messages": [{"role": "user", "content": user_content}],
             "stream": stream,
         }
-
         if images and len(images) > 0:
             request_data["messages"][0]["images"] = images
 
         if stream:
-            # 流式模式：逐块yield
             full_content = ""
+            # 宏控制：如果SKIP_THINKING为False，直接标记为已跳过（不过滤）
+            skipped_thinking = not SKIP_THINKING
+            thinking_buffer = ""  # 临时存储思考块内容（仅用于最终解析）
             async for chunk in _call_openai_compatible_api_stream(
                 session, request_data
             ):
                 if "choices" in chunk and chunk["choices"]:
                     delta = chunk["choices"][0].get("delta", {})
                     if "content" in delta and delta["content"]:
-                        full_content += delta["content"]
-                        yield {
-                            "type": "chunk",
-                            "content": delta["content"],
-                            "model": selected_model,
-                            "success": True,
-                        }
+                        chunk_content = delta["content"]
+                        full_content += chunk_content
+
+                        if not skipped_thinking:
+                            # 未跳过思考块：累积内容直到找到完整的</think>
+                            thinking_buffer += chunk_content
+                            if "</think>" in thinking_buffer:
+                                # 找到结束标记，截取后面的内容并返回
+                                _, useful_content = thinking_buffer.split("</think>", 1)
+                                skipped_thinking = True
+                                if useful_content:
+                                    yield {
+                                        "type": "chunk",
+                                        "content": useful_content,
+                                        "model": selected_model,
+                                        "success": True,
+                                    }
+                            # 未找到结束标记：不返回任何内容
+                        else:
+                            # 已跳过思考块：直接返回完整chunk内容
+                            yield {
+                                "type": "chunk",
+                                "content": chunk_content,
+                                "model": selected_model,
+                                "success": True,
+                            }
+            # 流式结束后返回完整解析结果
             thinking, content = parse_model_output(full_content)
             yield {
                 "type": "complete",
@@ -202,7 +207,7 @@ async def ai_response(
                 "success": True,
             }
         else:
-            # 非流式模式：yield最终结果
+            # 非流式部分不变
             response = await _call_openai_compatible_api(session, request_data)
             if "choices" in response and response["choices"]:
                 full_content = (
@@ -224,7 +229,6 @@ async def ai_response(
                     "error": "Abnormal API return format",
                     "success": False,
                 }
-
     except Exception as e:
         error_msg = f"Single-turn conversation error: {str(e)}"
         print(f"{datetime.now()} {error_msg}")
@@ -237,19 +241,13 @@ async def ai_response(
         }
 
 
-# -------------------------- Multi-turn Conversation Interface --------------------------
+# -------------------------- 多轮对话接口（简化流式过滤） --------------------------
 def new_chat_session(system_prompt: str | None = None) -> str:
     session_id = _generate_session_id()
     if system_prompt:
-        _chat_sessions[session_id] = [
-            {
-                "role": "system",
-                "content": system_prompt,
-            }
-        ]
+        _chat_sessions[session_id] = [{"role": "system", "content": system_prompt}]
     else:
         _chat_sessions[session_id] = []
-
     if _save_sessions(_chat_sessions):
         print(
             f"New chat session created successfully, ID: {session_id} (saved to file)"
@@ -265,7 +263,6 @@ def get_chat_history(session_id: str) -> list:
     return _chat_sessions.get(session_id, [])
 
 
-# llm_response.py - ai_chat 函数
 async def ai_chat(
     session_id: str,
     prompt: str,
@@ -282,7 +279,7 @@ async def ai_chat(
             "message": f"Session does not exist: {session_id}",
             "success": False,
         }
-        return  # 空return终止生成器
+        return
 
     selected_model = model_name if model_name in SUPPORTED_MODELS else DEFAULT_MODEL
     try:
@@ -301,23 +298,45 @@ async def ai_chat(
         }
 
         if stream:
-            # 流式模式：逐块yield
             full_content = ""
+            # 宏控制：如果SKIP_THINKING为False，直接标记为已跳过（不过滤）
+            skipped_thinking = not SKIP_THINKING
+            thinking_buffer = ""  # 临时存储思考块内容（仅用于最终解析）
             async for chunk in _call_openai_compatible_api_stream(
                 http_session, request_data
             ):
                 if "choices" in chunk and chunk["choices"]:
                     delta = chunk["choices"][0].get("delta", {})
                     if "content" in delta and delta["content"]:
-                        full_content += delta["content"]
-                        yield {
-                            "type": "chunk",
-                            "session_id": session_id,
-                            "content": delta["content"],
-                            "model": selected_model,
-                            "success": True,
-                        }
+                        chunk_content = delta["content"]
+                        full_content += chunk_content
 
+                        if not skipped_thinking:
+                            # 未跳过思考块：累积内容直到找到完整的</think>
+                            thinking_buffer += chunk_content
+                            if "</think>" in thinking_buffer:
+                                # 找到结束标记，截取后面的内容并返回
+                                _, useful_content = thinking_buffer.split("</think>", 1)
+                                skipped_thinking = True
+                                if useful_content:
+                                    yield {
+                                        "type": "chunk",
+                                        "session_id": session_id,
+                                        "content": useful_content,
+                                        "model": selected_model,
+                                        "success": True,
+                                    }
+                            # 未找到结束标记：不返回任何内容
+                        else:
+                            # 已跳过思考块：直接返回完整chunk内容
+                            yield {
+                                "type": "chunk",
+                                "session_id": session_id,
+                                "content": chunk_content,
+                                "model": selected_model,
+                                "success": True,
+                            }
+            # 流式结束后更新会话并返回完整结果
             thinking, content = parse_model_output(full_content)
             assistant_message = {"role": "assistant", "content": content}
             _chat_sessions[session_id].append(user_message)
@@ -334,7 +353,7 @@ async def ai_chat(
                 "success": True,
             }
         else:
-            # 非流式模式：yield最终结果
+            # 非流式部分不变
             response = await _call_openai_compatible_api(http_session, request_data)
             if "choices" in response and response["choices"]:
                 full_content = (
@@ -363,7 +382,6 @@ async def ai_chat(
                     "error": "Abnormal API return format",
                     "success": False,
                 }
-
     except Exception as e:
         error_msg = f"Multi-turn conversation error [{session_id}]: {str(e)}"
         print(f"{datetime.now()} {error_msg}")
@@ -376,26 +394,16 @@ async def ai_chat(
         }
 
 
-# -------------------------- Session Closure Interface --------------------------
+# -------------------------- 会话关闭接口（不变） --------------------------
 def close_chat_session(session_id: str) -> dict:
-    """
-    Close the specified chat session (delete session data from memory and file)
-    :param session_id: ID of the session to be closed
-    :return: Operation result dictionary containing success status and prompt information
-    """
     global _chat_sessions
-    # 1. Check if the session exists
     if session_id not in _chat_sessions:
         error_msg = f"Session does not exist: {session_id}"
         print(f"[Session Management] {error_msg}")
         return {"success": False, "error": error_msg}
-
     try:
-        # 2. Delete the session from memory
         del _chat_sessions[session_id]
         print(f"[Session Management] Session deleted from memory: {session_id}")
-
-        # 3. Synchronize updates to file storage (lock to ensure thread safety)
         save_success = _save_sessions(_chat_sessions)
         if save_success:
             print(f"[Session Management] Session deleted from file: {session_id}")
@@ -407,7 +415,6 @@ def close_chat_session(session_id: str) -> dict:
             error_msg = f"Session {session_id} deleted from memory successfully, but file update failed"
             print(f"[Session Management] {error_msg}")
             return {"success": False, "error": error_msg}
-
     except Exception as e:
         error_msg = f"Failed to close session {session_id}: {str(e)}"
         print(f"[Session Management] {error_msg}")

@@ -9,7 +9,7 @@ zh: |
   {{
     "task_type"："任务类型（如数据清洗、文本摘要、图表生成）"
     "goal"："核心目标（清晰描述期望结果）"
-    "input_data"："输入描述（数据来源/格式）"
+    "input_data"："输入描述（数据文件的内容与格式）"
     "output_requirement"："输出要求（格式/精度/样式）"
     "constraints"："约束（时间/资源限制）"
   }}
@@ -22,7 +22,7 @@ en: |
   {{
     "task_type": "Task type (e.g., data cleaning, text summarization, chart generation)",
     "goal": "Core objective (describe the expected result clearly)",
-    "input_data": "Input description (data source/format)",
+    "input_data": "Input description (data file content and format)",
     "output_requirement": "Output requirement (format/accuracy/style)",
     "constraints": "Constraints (time/resource limitations)"
   }}

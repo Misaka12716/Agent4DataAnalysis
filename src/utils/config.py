@@ -13,11 +13,13 @@ DOWNLOAD_FOLDER = os.path.join(TEMP_FOLDER, "downloads/")  # 下载文件存储�
 # 模型相关配置
 # --------------------------
 SUPPORTED_MODELS: List[str] = [
-    "qwen3:30b",
+    "qwen3:32b",
     "qwen3:8b",
     "qwen3:4b",
+    "qwen2.5:7b",
+    "qwen2.5:3b",
 ]  # 支持的模型列表
-DEFAULT_MODEL = "qwen3:8b"  # 默认使用的模型
+DEFAULT_MODEL = "qwen2.5:7b"  # 默认使用的模型
 LANGUAGE = "zh"  # 使用的语言(zn/en)
 
 # --------------------------
@@ -25,6 +27,7 @@ LANGUAGE = "zh"  # 使用的语言(zn/en)
 # --------------------------
 OPENAI_COMPATIBLE_API_BASE = "http://localhost:11434/v1"  # 兼容OpenAI的API基础地址
 API_KEY = ""  # API访问密钥（为空时可能表示无需密钥）
+WORKFLOW_API_BASE = "162.105.89.4/workflow/api/"  # 工作流API基础地址
 
 # --------------------------
 # MYSQL连接配置（核心参数）

@@ -1,5 +1,6 @@
 # 通用多智能体框架
 主题思路：利用知识与工具资源池化，提高多智能体在数据分析等领域的性能。
+注意：请所有修改都在docs文件夹内注明！
 
 ## Agentic Workflow过程设计
 [详见飞书文档](https://hqkygix2uv.feishu.cn/docx/ZRszdUuDBoO9ZexpccLchRoGn0g)

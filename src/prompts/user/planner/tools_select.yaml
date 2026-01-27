@@ -1,4 +1,4 @@
-id: user_tool_matching
+id: user_tools_select
 type: user
 description: 对话第5轮输入，根据每个worker的任务描述，要求Assistant从可用工具中筛选这一Worker可能需要用到的工具
 zh: |

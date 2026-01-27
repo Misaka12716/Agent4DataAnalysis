@@ -1,4 +1,4 @@
-# from .planner.multi_agent_planner import MultiAgentPlanner
+# from .planner.agent_planner import AgentPlanner
 # from .worker.multi_agent_worker import MultiAgentWorker
 # from .reporter.result_reporter import ResultReporter
 # from .discriminator.worker_discriminator import WorkerDiscriminator
@@ -10,7 +10,7 @@
 #     def __init__(self):
 #         # 初始化各组件
 #         self.knowledge_base = KnowledgeBase()
-#         self.planner = MultiAgentPlanner(self.knowledge_base)
+#         self.planner = AgentPlanner(self.knowledge_base)
 #         self.worker = MultiAgentWorker()
 #         self.reporter = ResultReporter()
 #         self.worker_discriminator = WorkerDiscriminator()
