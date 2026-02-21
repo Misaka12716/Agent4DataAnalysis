@@ -79,7 +79,7 @@ class PromptBuilder:
             print(f"params: {params}")
             return None
 
-    def build_system_prompt(self, role: str) -> Optional[str]:
+    def build_system_prompt(self, role: str, **params: Any) -> Optional[str]:
         """
         构建指定角色的系统提示词(system prompt)
         Args:
@@ -104,7 +104,7 @@ class PromptBuilder:
             yaml_data = self._load_yaml(yaml_path)
 
             # 调用通用build方法生成prompt
-            prompt = self.build(yaml_data)
+            prompt = self.build(yaml_data, **params)
             return prompt
         except Exception as e:
             print(f"构建system_prompt({role})失败：{e}")

@@ -18,8 +18,10 @@ SUPPORTED_MODELS: List[str] = [
     "qwen3:4b",
     "qwen2.5:7b",
     "qwen2.5:3b",
+    "qweb3-coder:30b",
 ]  # 支持的模型列表
 DEFAULT_MODEL = "qwen2.5:7b"  # 默认使用的模型
+DEFAULT_CODER_MODEL = "qwen3-coder:30b"  # 默认使用的模型
 LANGUAGE = "zh"  # 使用的语言(zn/en)
 
 # --------------------------
@@ -67,3 +69,10 @@ NEO4J_PORT = int(os.getenv("NEO4J_PORT", 7687))
 TABLE_TOOLS_META_INFO = "tools"
 # 存储工具标签的表名
 TABLE_TOOLS_TAGS = "tool_tags"
+
+# --------------------------
+# ipynb相关配置
+# --------------------------
+# 执行内核
+IPYNB_KERNEL_NAME = "agentplatform"  # Jupyter内核名称
+IPYNB_KERNEL_DISPLAY_NAME = "Python (agentPlatform)"  # Jupyter内核显示名称

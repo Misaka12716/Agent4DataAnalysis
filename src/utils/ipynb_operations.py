@@ -4,6 +4,7 @@ import nbformat
 from nbclient import NotebookClient
 from nbclient.exceptions import CellExecutionError
 from nbformat import v4 as nbv4
+from utils.config import IPYNB_KERNEL_NAME, IPYNB_KERNEL_DISPLAY_NAME
 
 
 def read_ipynb(file_path: str) -> nbformat.NotebookNode:
@@ -61,7 +62,7 @@ def run_ipynb(
     client = NotebookClient(
         nb,
         timeout=timeout,
-        kernel_name="python3",  # 指定Python内核
+        kernel_name=IPYNB_KERNEL_NAME,  # 指定Python内核
         allow_errors=False,  # 遇到错误立即停止
         record_timing=False,
     )
@@ -75,7 +76,7 @@ def run_ipynb(
             return nb
     except CellExecutionError as e:
         # 捕获单元格执行错误，打印详细信息
-        print(f"❌ 单元格执行失败 - 单元格索引: {e.cell_index}, 错误: {e}")
+        print(f"❌ 单元格执行失败 - 错误: {e}")
         raise
     except Exception as e:
         print(f"❌ 执行出错: {e}")
@@ -91,9 +92,9 @@ def create_empty_ipynb() -> nbformat.NotebookNode:
     # 设置默认元数据
     nb.metadata = {
         "kernelspec": {
-            "display_name": "Python 3",
+            "display_name": IPYNB_KERNEL_DISPLAY_NAME,
             "language": "python",
-            "name": "python3",
+            "name": IPYNB_KERNEL_NAME,
         },
         "language_info": {
             "codemirror_mode": {"name": "ipython", "version": 3},
@@ -165,3 +166,53 @@ def extract_code_cells(nb: nbformat.NotebookNode) -> list[str]:
         if cell.cell_type == "code":
             code_list.append(cell.source)
     return code_list
+
+
+# ------------------- 示例用法 -------------------
+if __name__ == "__main__":
+    # 1. 创建一个新的空Notebook
+    new_nb = create_empty_ipynb()
+
+    # 2. 添加代码和markdown单元格
+    add_cell(new_nb, "markdown", "# 自动生成的Notebook")
+    add_cell(
+        new_nb,
+        "code",
+        "import numpy as np\nprint('Hello, IPynb!')\nprint(f'numpy版本: {np.__version__}')",
+    )
+
+    # 3. 保存Notebook
+    save_path = "test_notebook.ipynb"
+    write_ipynb(new_nb, save_path, overwrite=True)
+    print(f"📝 已保存空Notebook到: {save_path}")
+
+    # 4. 读取并运行Notebook
+    try:
+        executed_nb = run_ipynb(save_path)
+        # 输出执行结果
+        for i, cell in enumerate(executed_nb.cells):
+            print(f"\n--- 单元格 {i} 输出 ---")
+            if cell.cell_type == "code":
+                print(cell.outputs[0].text)
+            else:
+                print(cell.source)
+
+        # 5. 提取所有代码单元格内容
+        code_content = extract_code_cells(executed_nb)
+        print("\n📄 提取的代码内容:")
+        for i, code in enumerate(code_content):
+            print(f"单元格 {i}:\n{code}\n")
+
+        # 6. 修改第一个代码单元格
+        modify_cell(
+            executed_nb,
+            1,
+            "import pandas as pd\nprint('修改后的代码运行成功!')\nprint(f'pandas版本: {pd.__version__}')",
+        )
+
+        # 7. 保存修改后的Notebook
+        write_ipynb(executed_nb, "modified_notebook.ipynb", overwrite=True)
+        print("✅ 修改后的Notebook已保存")
+
+    except Exception as e:
+        print(f"❌ 示例运行出错: {e}")
