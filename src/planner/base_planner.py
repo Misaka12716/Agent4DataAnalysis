@@ -23,11 +23,6 @@ class BasePlanner(ABC):
         pass
 
     @abstractmethod
-    async def find_tools(self, requirement: Dict[str, Any]) -> Dict[str, Any]:
-        """工具匹配"""
-        pass
-
-    @abstractmethod
     async def assign_tasks(
         self,
         requirement: Dict[str, Any],

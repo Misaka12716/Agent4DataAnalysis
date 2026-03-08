@@ -39,7 +39,7 @@ MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
 # 数据库用户名（默认root）
 MYSQL_USER = "root"
 # 数据库密码
-MYSQL_PASSWORD = "pku123"
+MYSQL_PASSWORD = "88888888"
 # 数据库名称
 MYSQL_DB = "agent_platform"
 # 数据库端口（默认3306）
@@ -47,32 +47,3 @@ MYSQL_DB = "agent_platform"
 MYSQL_PORT = int(os.getenv("MYSQL_PORT", 3306))
 # 字符编码（支持emoji）
 MYSQL_CHARSET = "utf8mb4"
-
-# --------------------------
-# neo4j连接配置（核心参数）
-# --------------------------
-# neo4j主机地址（优先从环境变量读取，默认localhost）
-NEO4J_HOST = os.getenv("NEO4J_HOST", "localhost")
-# neo4j用户名（默认neo4j）
-NEO4J_USER = "neo4j"
-# neo4j密码
-NEO4J_PASSWORD = "pku12345"
-# neo4j数据库名称（默认neo4j）
-NEO4J_DB = "neo4j"
-# neo4j端口（默认7687）
-NEO4J_PORT = int(os.getenv("NEO4J_PORT", 7687))
-
-# --------------------------
-# 工具池核心配置
-# --------------------------
-# 存储工具元信息的表名
-TABLE_TOOLS_META_INFO = "tools"
-# 存储工具标签的表名
-TABLE_TOOLS_TAGS = "tool_tags"
-
-# --------------------------
-# ipynb相关配置
-# --------------------------
-# 执行内核
-IPYNB_KERNEL_NAME = "agentplatform"  # Jupyter内核名称
-IPYNB_KERNEL_DISPLAY_NAME = "Python (agentPlatform)"  # Jupyter内核显示名称

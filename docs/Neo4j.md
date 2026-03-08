@@ -49,3 +49,7 @@ neo4j-admin database load --from-path="E:\Desktop" --overwrite-destination=true 
 > 注意事项：
 > - 引号内的路径需替换为本地 dump 文件所在的**目录**（仅目录，不包含文件名）。
 > - 命令末尾的 `neo4j` 为目标数据库名称，初始数据库默认名为 `neo4j`，可根据实际需求修改。
+
+
+mysql -u root -p
+88888888

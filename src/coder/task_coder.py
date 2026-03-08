@@ -12,6 +12,7 @@ from utils.config import (
     DEFAULT_MODEL,
     DEFAULT_CODER_MODEL,
 )
+from utils.code_operations import extract_code_components
 
 # 导入之前的ipynb操作函数（确保ipynb_operations.py在同级目录）
 from utils.ipynb_operations import (
@@ -300,7 +301,6 @@ def finalize_ipynb_node(state: CodeAgentState) -> CodeAgentState:
             output_var = state["output_var_name"]
             run_statement = f"""
 # 运行函数
-{input_var} = None  # 请根据实际需求赋值（{state['input_var_desc']}）
 {output_var} = {func_name}({input_var})
 print(f"输出结果（{output_var}）：{{{output_var}}}")
 """

@@ -1,1 +1,0 @@
-cd src && python -u run_planner.py

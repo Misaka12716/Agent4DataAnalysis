@@ -7,9 +7,10 @@ pip install -r requirements.txt
 ## 安装IPython内核
 python -m ipykernel install --user --name agentPlatform --display-name "Python (agentPlatform)"
 
-## 启动前端指令
-cd src && streamlit run frontend/frontend.py   
-
 ## 启动后端指令
-cd src
-python -m backend.server
+cd /data/agent_platform/src
+uvicorn backend.server:app --host 0.0.0.0 --port 52716
+
+## 启动前端指令
+cd /data/agent_platform/src
+streamlit run frontend/frontend.py
