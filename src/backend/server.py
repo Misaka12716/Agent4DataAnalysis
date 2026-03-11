@@ -14,7 +14,6 @@ from planner.agent_planner import AgentPlanner
 from coder.workspace_coder import generate_and_write_code
 from worker.workspace_worker import run_workspace_tasks
 from reporter.report_agent import stream_report
-import aiohttp
 
 # -------------------------- 配置与初始化 --------------------------
 app = FastAPI(title="Agent Workflow Server", version="1.1")  # 版本更新为1.1
@@ -54,54 +53,6 @@ class StreamingTaskRequest(BaseModel):
     input_data: str
 
 
-# -------------------------- 工具函数 --------------------------
-def get_file_details(file_path: str) -> dict:
-    """获取文件详细信息（用于上传后返回）"""
-    try:
-        file_stat = os.stat(file_path)
-        file_name = os.path.basename(file_path)
-        # 获取文件MIME类型（简化版，如需精确可使用 python-magic 库）
-        file_ext = os.path.splitext(file_name)[1].lower()
-        mime_map = {
-            ".txt": "text/plain",
-            ".pdf": "application/pdf",
-            ".csv": "text/csv",
-            ".json": "application/json",
-            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-        }
-        file_type = mime_map.get(file_ext, "application/octet-stream")
-
-        return {
-            "file_path": file_path,  # 文件存储绝对路径
-            "file_name": file_name,  # 文件名（含后缀）
-            "file_size": file_stat.st_size,  # 大小（字节）
-            "file_size_human": (
-                f"{file_stat.st_size / 1024:.2f}KB"
-                if file_stat.st_size < 1024 * 1024
-                else f"{file_stat.st_size / (1024*1024):.2f}MB"
-            ),  # 人性化大小
-            "file_type": file_type,  # MIME类型
-            "upload_time": datetime.fromtimestamp(file_stat.st_ctime).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),  # 上传时间
-            "is_exists": True,
-        }
-    except Exception as e:
-        return {
-            "file_path": file_path,
-            "file_name": os.path.basename(file_path),
-            "file_size": 0,
-            "file_size_human": "0B",
-            "file_type": "unknown",
-            "upload_time": "",
-            "is_exists": False,
-            "error": str(e),
-        }
-
 
 # -------------------------- 流式分析任务（会话绑定 + 快照增量） --------------------------
 async def streaming_task_generator(
@@ -121,8 +72,7 @@ async def streaming_task_generator(
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     try:
-        async with aiohttp.ClientSession() as http_session:
-            async with AgentPlanner(http_session=http_session) as planner:
+        async with AgentPlanner() as planner:
                 # 1. Planner（带工作区 Excel 增强）
                 plan_data = None
                 async for event in planner.run_flow_with_workspace(session_id, input_data):

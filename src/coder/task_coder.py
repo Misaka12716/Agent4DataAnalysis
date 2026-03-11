@@ -4,15 +4,14 @@ import json
 from typing import TypedDict, Optional, List
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import SystemMessage, HumanMessage
 from utils.config import (
     OPENAI_COMPATIBLE_API_BASE,
     API_KEY,
     DEFAULT_MODEL,
     DEFAULT_CODER_MODEL,
 )
-from utils.code_operations import extract_code_components
+from configs.prompts import get_coder_system_prompt, get_user_prompt
 
 # 导入之前的ipynb操作函数（确保ipynb_operations.py在同级目录）
 from utils.ipynb_operations import (
@@ -98,40 +97,23 @@ def generate_ipynb_node(state: CodeAgentState) -> CodeAgentState:
     """
     llm = init_llm()
 
-    # 直接生成纯代码
-    code_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """
-你是专业的Python程序员，需要根据任务要求生成规范的Python代码，严格遵循以下规则：
-1. 代码包含且仅包含以下三部分内容（按顺序整合在一个代码块中）：
-   - 第一部分：仅包含必要的import语句（不要多余库）；
-   - 第二部分：封装一个完整的函数，函数名清晰（如task_xxx），严格使用指定的输入/输出变量名：
-     - 输入变量名：{input_var_name}（说明：{input_var_desc}）
-     - 输出变量名：{output_var_name}（说明：{output_var_desc}）
-     函数必须有清晰的文档字符串（说明功能、参数、返回值），参数和返回值严格匹配指定变量名；
-   - 第三部分：demo测试代码，创建测试输入（符合{input_var_name}的类型/格式），调用函数，打印{output_var_name}，验证函数正确性；
-2. 代码必须可运行，无语法错误，符合Python最佳实践；
-3. 不要添加任何多余内容（如markdown、注释说明、分隔符等），仅返回纯Python代码；
-4. 确保代码缩进正确，格式规范。
-            """,
-            ),
-            ("user", "任务要求：{task_desc}"),
-        ]
+    system_content = get_coder_system_prompt(
+        "generate",
+        "zh",
+        input_var_name=state["input_var_name"],
+        input_var_desc=state["input_var_desc"],
+        output_var_name=state["output_var_name"],
+        output_var_desc=state["output_var_desc"],
     )
-
-    # 构建链并生成纯代码
-    chain = code_prompt | llm | StrOutputParser()
-    raw_code = chain.invoke(
-        {
-            "task_desc": state["task_desc"],
-            "input_var_name": state["input_var_name"],
-            "input_var_desc": state["input_var_desc"],
-            "output_var_name": state["output_var_name"],
-            "output_var_desc": state["output_var_desc"],
-        }
+    user_content = get_user_prompt(
+        "coder",
+        "generate",
+        "zh",
+        task_desc=state["task_desc"],
     )
+    messages = [SystemMessage(content=system_content), HumanMessage(content=user_content)]
+    response = llm.invoke(messages)
+    raw_code = response.content if hasattr(response, "content") else str(response)
 
     # 清理代码中的Markdown格式
     code_content = clean_code_from_markdown(raw_code)
@@ -202,33 +184,16 @@ def correct_ipynb_node(state: CodeAgentState) -> CodeAgentState:
             existing_code = cell.source
             break
 
-    # 构建修正Prompt（专注于纯代码修正）
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """
-你是专业的Python调试工程师，需要修正以下代码的错误：
-1. 现有代码（包含import、函数、测试三部分，整合在一个代码块中）：
-{existing_code}
-2. 执行错误信息：
-{error_msg}
-3. 修正规则：
-   - 仅修正错误，不改变原有的输入/输出变量名和核心逻辑；
-   - 保持代码结构：仍包含import、函数、测试三部分（整合在一个代码块中）；
-   - 修正后代码必须可运行，缩进正确；
-   - 仅返回修正后的完整纯Python代码，不要其他解释。
-        """,
-            ),
-            ("user", "请修正上述代码错误"),
-        ]
+    system_content = get_coder_system_prompt(
+        "correct",
+        "zh",
+        existing_code=existing_code,
+        error_msg=error_msg,
     )
-
-    # 调用LLM生成修正后的代码
-    chain = prompt | llm | StrOutputParser()
-    corrected_raw_code = chain.invoke(
-        {"existing_code": existing_code, "error_msg": error_msg}
-    )
+    user_content = get_user_prompt("coder", "correct", "zh")
+    messages = [SystemMessage(content=system_content), HumanMessage(content=user_content)]
+    response = llm.invoke(messages)
+    corrected_raw_code = response.content if hasattr(response, "content") else str(response)
 
     corrected_code = clean_code_from_markdown(corrected_raw_code)
 

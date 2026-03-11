@@ -5,28 +5,24 @@ from typing import AsyncGenerator, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from utils.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
-from configs.prompts import get_system_prompt
+from configs.prompts import get_system_prompt, get_user_prompt
 
 
-def _build_report_prompt(planner_summary: str, worker_results: Dict[str, Any]) -> str:
-    """根据规划摘要与执行结果构建报告生成用的用户提示。"""
+def _report_user_prompt(planner_summary: str, worker_results: Dict[str, Any], lang: str = "zh") -> str:
+    """从 configs.prompts 获取报告生成的用户提示并填入参数。"""
     logs = worker_results.get("logs", "")
     errors = worker_results.get("error_messages", [])
     success = worker_results.get("success", False)
-    prompt = f"""请根据以下规划与执行结果，生成一份简洁、结构清晰的数据分析报告。
-
-## 规划摘要
-{planner_summary}
-
-## 执行结果
-- 整体成功: {success}
-- 执行日志:
-{logs}
-"""
+    error_section = ""
     if errors:
-        prompt += f"\n- 错误信息:\n" + "\n".join(f"  - {e}" for e in errors)
-    prompt += "\n\n请用中文撰写报告，包含：1) 分析目标 2) 主要发现 3) 结论与建议。"
-    return prompt
+        error_section = "\n- 错误信息:\n" + "\n".join(f"  - {e}" for e in errors)
+    return get_user_prompt(
+        "reporter", "report", lang=lang,
+        planner_summary=planner_summary,
+        success=success,
+        execution_logs=logs,
+        error_section=error_section,
+    )
 
 
 async def stream_report(
@@ -42,7 +38,7 @@ async def stream_report(
     :yield: 报告文本片段（用于 SSE 等流式推送）
     """
     system_prompt = get_system_prompt("reporter", lang)
-    user_prompt = _build_report_prompt(planner_summary, worker_results)
+    user_prompt = _report_user_prompt(planner_summary, worker_results, lang)
     llm = ChatOpenAI(
         model=DEFAULT_MODEL,
         temperature=0.3,
