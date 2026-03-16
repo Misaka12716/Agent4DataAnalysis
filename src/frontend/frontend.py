@@ -50,8 +50,8 @@ tab1, tab2, tab3 = st.tabs(["1. 上传 Excel", "2. 会话快照", "3. 流式分�
 
 with tab1:
     st.subheader("上传 Excel 到会话工作区")
-    st.caption("调用 POST /session/upload-excel，文件会保存到该会话工作区的 input/ 目录。")
-    uploaded = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls"], key="upload_excel")
+    st.caption("调用 POST /session/upload-excel，文件会保存到该会话工作区根目录。")
+    uploaded = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls","csv"], key="upload_excel")
     if uploaded and session_id:
         if st.button("上传", key="btn_upload"):
             with st.spinner("上传中..."):
@@ -102,7 +102,7 @@ with tab3:
     st.caption("调用 POST /run-analysis，绑定当前会话，执行 Planner→Coder→Worker→Reporter，实时显示 SSE 推送。")
     input_data = st.text_area(
         "分析需求 (input_data)",
-        value="请对工作区 input 目录下的 Excel 做简单描述性统计，并给出结论。",
+        value="请对工作区目录下的 Excel 做简单描述性统计，并给出结论。",
         height=80,
         key="input_data",
     )

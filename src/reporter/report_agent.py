@@ -6,6 +6,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from utils.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
 from configs.prompts import get_system_prompt, get_user_prompt
+from utils.model_logger import log_model_event
 
 
 def _report_user_prompt(planner_summary: str, worker_results: Dict[str, Any], lang: str = "zh") -> str:
@@ -14,6 +15,11 @@ def _report_user_prompt(planner_summary: str, worker_results: Dict[str, Any], la
     errors = worker_results.get("error_messages", [])
     success = worker_results.get("success", False)
     error_section = ""
+    # 若执行标记成功但无任何日志输出，认为可能存在“仅定义函数未实际运行”的情况，给出提示
+    if success and not logs:
+        msg = "代码执行未产生任何可见输出，请检查是否编写了入口逻辑（如 demo 测试代码或 main 函数）。"
+        errors = list(errors) if isinstance(errors, list) else [str(errors)]
+        errors.append(msg)
     if errors:
         error_section = "\n- 错误信息:\n" + "\n".join(f"  - {e}" for e in errors)
     return get_user_prompt(
@@ -29,6 +35,7 @@ async def stream_report(
     planner_summary: str,
     worker_results: Dict[str, Any],
     lang: str = "zh",
+    session_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     流式生成最终分析报告。
@@ -39,6 +46,22 @@ async def stream_report(
     """
     system_prompt = get_system_prompt("reporter", lang)
     user_prompt = _report_user_prompt(planner_summary, worker_results, lang)
+
+    # 日志：记录 Reporter 阶段输入
+    log_model_event(
+        dialogue_id=session_id or "",
+        stage="reporter_input",
+        content={
+            "planner_summary": planner_summary,
+            "worker_results_brief": {
+                "success": worker_results.get("success"),
+                "has_logs": bool(worker_results.get("logs")),
+                "error_messages": worker_results.get("error_messages"),
+            },
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+        },
+    )
     llm = ChatOpenAI(
         model=DEFAULT_MODEL,
         temperature=0.3,
@@ -51,7 +74,16 @@ async def stream_report(
         ("human", "{input}"),
     ])
     chain = prompt | llm
+    full_output = ""
     async for chunk in chain.astream({"input": user_prompt}):
         content = chunk.content if hasattr(chunk, "content") else chunk.get("content", "")
         if content:
+            full_output += content
             yield content
+
+    # 日志：记录 Reporter 阶段完整输出
+    log_model_event(
+        dialogue_id=session_id or "",
+        stage="reporter_output",
+        content={"full_output": full_output},
+    )

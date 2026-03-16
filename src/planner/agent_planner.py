@@ -4,6 +4,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from configs.prompts import get_system_prompt, get_user_prompt
 from utils.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
+from utils.model_logger import log_model_event
 from utils.workspace_manager import resolve_workspace_root
 from utils.dataframe_reader import read_workspace_excel_schema_and_sample
 from db.session_store import SessionStore
@@ -41,6 +42,7 @@ def _create_llm(streaming: bool = True) -> ChatOpenAI:
 async def _node_req_analysis(state: Dict[str, Any]) -> Dict[str, Any]:
     """节点：解析用户需求，产出结构化需求 JSON。"""
     cb = state.get("stream_callback")
+    session_id = state.get("session_id", "")  # 用于日志中的对话ID
     messages: List[BaseMessage] = state.get("messages") or []
     lang = state.get("lang", "zh")
     input_data = state["input_requirement"]
@@ -56,6 +58,17 @@ async def _node_req_analysis(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     full_content = ""
 
+    # 日志：记录模型输入
+    log_model_event(
+        dialogue_id=session_id,
+        stage="planner_req_analysis_input",
+        content={
+            "input_requirement": input_data,
+            "file_info": file_info,
+            "user_prompt": user_prompt,
+        },
+    )
+
     llm = _create_llm(streaming=True)
     chat_messages = messages + [HumanMessage(content=user_prompt.strip())]
 
@@ -68,6 +81,17 @@ async def _node_req_analysis(state: Dict[str, Any]) -> Dict[str, Any]:
             await cb("llm_chunk", {"content": token})
 
     thinking, content = _parse_thinking_and_content(full_content)
+
+    # 日志：记录模型原始输出与解析结果
+    log_model_event(
+        dialogue_id=session_id,
+        stage="planner_req_analysis_output",
+        content={
+            "raw_output": full_content,
+            "thinking": thinking,
+            "content": content,
+        },
+    )
     if cb:
         await cb("llm_complete", {"content": content, "thinking": thinking})
 
@@ -85,6 +109,7 @@ async def _node_req_analysis(state: Dict[str, Any]) -> Dict[str, Any]:
 async def _node_assign_tasks(state: Dict[str, Any]) -> Dict[str, Any]:
     """节点：根据结构化需求分解为子任务列表。"""
     cb = state.get("stream_callback")
+    session_id = state.get("session_id", "")  # 用于日志中的对话ID
     messages: List[BaseMessage] = state.get("messages") or []
     lang = state.get("lang", "zh")
     requirement = state.get("structured_req")
@@ -100,6 +125,16 @@ async def _node_assign_tasks(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     full_content = ""
 
+    # 日志：记录任务分解阶段输入
+    log_model_event(
+        dialogue_id=session_id,
+        stage="planner_assign_tasks_input",
+        content={
+            "structured_requirement": requirement,
+            "user_prompt": user_prompt,
+        },
+    )
+
     llm = _create_llm(streaming=True)
     chat_messages = messages + [HumanMessage(content=user_prompt)]
 
@@ -112,6 +147,17 @@ async def _node_assign_tasks(state: Dict[str, Any]) -> Dict[str, Any]:
             await cb("llm_chunk", {"content": token})
 
     thinking, content = _parse_thinking_and_content(full_content)
+
+    # 日志：记录任务分解阶段原始输出与解析结果
+    log_model_event(
+        dialogue_id=session_id,
+        stage="planner_assign_tasks_output",
+        content={
+            "raw_output": full_content,
+            "thinking": thinking,
+            "content": content,
+        },
+    )
     if cb:
         await cb("llm_complete", {"content": content, "thinking": thinking})
 
@@ -157,6 +203,13 @@ async def _node_assign_tasks(state: Dict[str, Any]) -> Dict[str, Any]:
             if tid in task_ids:
                 raise ValueError(f"重复task_id：{tid}")
             task_ids.append(tid)
+
+        # 日志：记录解析后的任务列表
+        log_model_event(
+            dialogue_id=session_id,
+            stage="planner_assign_tasks_parsed",
+            content={"tasks": tasks},
+        )
 
         return {"tasks": tasks, "messages": new_messages, "error": None}
     except Exception as e:
@@ -216,8 +269,7 @@ class AgentPlanner:
         )
         if not workspace_abs:
             return "No files uploaded"
-        input_dir = os.path.join(workspace_abs, "input")
-        excel_info = read_workspace_excel_schema_and_sample(input_dir)
+        excel_info = read_workspace_excel_schema_and_sample(workspace_abs)
         try:
             return json.dumps(excel_info, ensure_ascii=False, default=str)
         except Exception:
@@ -227,11 +279,18 @@ class AgentPlanner:
         self, session_id: str, input_requirement: str
     ) -> AsyncGenerator[Dict[str, Any], None]:
         file_info = self._get_workspace_file_info(session_id)
-        async for item in self.run_flow(input_requirement, file_info):
+        async for item in self.run_flow(
+            input_requirement=input_requirement,
+            file_info=file_info,
+            session_id=session_id,
+        ):
             yield item
 
     async def run_flow(
-        self, input_requirement: str, file_info: str = "No files uploaded"
+        self,
+        input_requirement: str,
+        file_info: str = "No files uploaded",
+        session_id: str = "",
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         运行规划流程，仅 yield：
@@ -256,6 +315,7 @@ class AgentPlanner:
                     "messages": [SystemMessage(content=self.system_prompt)],
                     "lang": self.lang,
                     "stream_callback": stream_callback,
+                    "session_id": session_id,
                 }
                 async for state in self._graph.astream(initial):
                     final_state = state
@@ -310,13 +370,13 @@ class AgentPlanner:
         tasks_list = final_state.get("tasks") or []
         execution_mode = "simple" if len(tasks_list) <= 1 else "complex"
         code_file_paths = (
-            ["code/main.py"]
+            ["main.py"]
             if execution_mode == "simple"
-            else [f"code/task_{t.get('task_id', i)}.py" for i, t in enumerate(tasks_list, 1)]
+            else [f"task_{t.get('task_id', i)}.py" for i, t in enumerate(tasks_list, 1)]
         )
         for i, t in enumerate(tasks_list):
             t["relative_path"] = (
-                code_file_paths[i] if i < len(code_file_paths) else f"code/task_{t.get('task_id', i)}.py"
+                code_file_paths[i] if i < len(code_file_paths) else f"task_{t.get('task_id', i)}.py"
             )
 
         task_assign_result = {

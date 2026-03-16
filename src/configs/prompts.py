@@ -55,10 +55,11 @@ CODER_GENERATE_SYSTEM_ZH = """你是专业的Python程序员，需要根据任�
      - 输入变量名：{input_var_name}（说明：{input_var_desc}）
      - 输出变量名：{output_var_name}（说明：{output_var_desc}）
      函数必须有清晰的文档字符串（说明功能、参数、返回值），参数和返回值严格匹配指定变量名；
-   - 第三部分：demo测试代码，创建测试输入（符合{input_var_name}的类型/格式），调用函数，打印{output_var_name}，验证函数正确性；
-2. 代码必须可运行，无语法错误，符合Python最佳实践；
-3. 不要添加任何多余内容（如markdown、注释说明、分隔符等），仅返回纯Python代码；
-4. 确保代码缩进正确，格式规范。
+   - 第三部分：demo测试代码，必须基于下方「工作区文件列表与格式」中的真实文件路径与格式读取数据作为输入，调用函数并打印{output_var_name}；禁止编造假数据或假文件路径；
+2. 输入必须使用工作区中真实存在的数据文件路径与格式（相对路径，执行时 cwd 为工作区根目录），不得臆造文件名；
+3. 代码必须可运行，无语法错误，符合Python最佳实践；
+4. 不要添加任何多余内容（如markdown、注释说明、分隔符等），仅返回纯Python代码；
+5. 确保代码缩进正确，格式规范。
 """
 CODER_GENERATE_SYSTEM_EN = """You are a professional Python programmer. Generate standardized Python code according to task requirements, strictly following these rules:
 1. The code must contain exactly three parts in order (in a single code block):
@@ -67,10 +68,11 @@ CODER_GENERATE_SYSTEM_EN = """You are a professional Python programmer. Generate
      - Input variable: {input_var_name} (description: {input_var_desc})
      - Output variable: {output_var_name} (description: {output_var_desc})
      The function must have a clear docstring (purpose, parameters, return value); parameters and return must match the specified variable names;
-   - Part 3: Demo test code that creates test input (matching {input_var_name} type/format), calls the function, prints {output_var_name}, and verifies correctness;
-2. Code must be runnable, syntax-error-free, and follow Python best practices;
-3. Do not add any extra content (markdown, comments, delimiters, etc.); return only pure Python code;
-4. Ensure correct indentation and formatting.
+   - Part 3: Demo test code must read real data using file paths and formats from the workspace file list below, call the function, and print {output_var_name}; do not fabricate data or paths;
+2. Use only real workspace file paths and formats (relative paths; cwd at runtime is workspace root); do not invent filenames;
+3. Code must be runnable, syntax-error-free, and follow Python best practices;
+4. Do not add any extra content (markdown, comments, delimiters, etc.); return only pure Python code;
+5. Ensure correct indentation and formatting.
 """
 
 # Coder - 代码修正（correct）专用 system
@@ -140,7 +142,8 @@ SYSTEM_PROMPT_REPORTER = {
 # planner - req_analysis
 USER_PROMPT_PLANNER_REQ_ANALYSIS_ZH = """请将用户需求结构化解析。
 待解析需求：{input_data}
-用户上传的文件信息： {file_info}
+工作区中可用的数据文件信息（包含真实相对路径与列信息）：{file_info}
+重要约束：当你在后续内容中提及具体数据文件时，必须严格使用上述文件信息中的相对路径（例如 input/20260316_xxx.xlsx），禁止使用用户原始描述中的文件名或自行编造文件路径。
 仅返回JSON（无额外文字），需包含以下必选字段，未知信息留空：
 {{
   "task_type"："任务类型（如数据清洗、文本摘要、图表生成）"
@@ -152,7 +155,8 @@ USER_PROMPT_PLANNER_REQ_ANALYSIS_ZH = """请将用户需求结构化解析。
 """
 USER_PROMPT_PLANNER_REQ_ANALYSIS_EN = """Please conduct a structured analysis of user requirements.
 Requirements to be analyzed: {input_data}
-User uploaded file information: {file_info}
+Workspace data file information (real relative paths and schema): {file_info}
+Important constraint: whenever you refer to concrete data files, you must strictly use the relative paths from the file information above (e.g. input/20260316_xxx.xlsx). Do NOT use filenames only mentioned in the user's description and NEVER invent new paths.
 Return only JSON (no extra text). It must include the following mandatory fields; leave unknown information blank:
 {{
   "task_type": "Task type (e.g., data cleaning, text summarization, chart generation)",
@@ -176,8 +180,8 @@ USER_PROMPT_PLANNER_ASSIGN_TASKS_ZH = """  请基于以下核心需求，将当�
         "description": "字符串（≤50字，说明“具体执行方式”，不笼统表述）",
         "dependencies": "整数数组，仅列出直接前置任务ID（无依赖填[]，不填间接依赖）",
         "worker_type": "字符串（仅可选：数据/文本/逻辑/图表，严格对应任务核心处理类型）",
-        "input": "字符串数组，每个元素描述单个输入项的“内容+格式”，需完全来源于依赖任务的output数组元素，标注对应上游任务与输出项（无冗余）",
-        "output": "字符串数组，每个元素描述单个输出项的“内容+格式”，需为下游任务input数组提供可直接引用的数据源（无模糊表述）"
+        "input": "字符串数组，每个元素描述单个输入项的“内容+格式”，需完全来源于依赖任务的output数组元素，标注对应上游任务与输出项（无冗余）；如涉及数据文件，必须使用工作区真实相对路径（例如 input/20260316_xxx.xlsx），不得使用用户原始文件名或臆造路径",
+        "output": "字符串数组，每个元素描述单个输出项的“内容+格式”，需为下游任务input数组提供可直接引用的数据源（无模糊表述）；如输出为文件，同样需要给出计划中的相对路径约定"
       }}
     3. 数据流转铁律（强制遵循）：
       - 下游任务的input数组元素必须是其直接依赖任务output数组元素的“精准子集”，需明确关联上游任务ID与具体输出项（如“任务1的output[0]：去重清洗后CSV数据”）；

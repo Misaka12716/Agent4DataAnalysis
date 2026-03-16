@@ -17,6 +17,7 @@ from utils.config import (
     DEFAULT_MODEL,
     DEFAULT_CODER_MODEL,
 )
+from utils.model_logger import log_model_event
 
 # -------------------------- 全局配置 --------------------------
 SAMPLING_THRESHOLD = 1000
@@ -36,6 +37,7 @@ class AnalysisState(TypedDict, total=False):
     report: str
     preview_rows: List[Dict]
     header_fix_info: str
+    dialogue_id: str  # 可选，对话ID，用于日志文件命名
 
 
 # -------------------------- 核心工具函数 --------------------------
@@ -180,13 +182,29 @@ def fix_df_by_llm_result(
 # -------------------------- 核心节点函数 --------------------------
 def llm_header_analysis_node(state: Dict[str, Any]) -> Dict[str, Any]:
     df = state["df"]
+    dialogue_id = state.get("dialogue_id", "")
     llm = ChatOpenAI(
         model=DEFAULT_MODEL,
         temperature=0.1,
         api_key=API_KEY,
         base_url=OPENAI_COMPATIBLE_API_BASE,
     )
+    # 日志：记录表头分析阶段输入
+    log_model_event(
+        dialogue_id=dialogue_id,
+        stage="dataframe_llm_header_input",
+        content={"head_preview": extract_table_with_coords(df, LLM_ANALYSIS_ROWS)},
+    )
+
     llm_result = llm_analyze_header(df, llm)
+
+    # 日志：记录表头分析阶段输出
+    log_model_event(
+        dialogue_id=dialogue_id,
+        stage="dataframe_llm_header_output",
+        content=llm_result,
+    )
+
     print(
         f"【LLM表头分析结果】\n{json.dumps(llm_result, ensure_ascii=False, indent=2)}"
     )
@@ -301,6 +319,7 @@ def generate_report_node(state: Dict[str, Any]) -> Dict[str, Any]:
     stats_info = state["stats_info"]
     preview_rows = state["preview_rows"]
     header_fix_info = state["header_fix_info"]
+    dialogue_id = state.get("dialogue_id", "")
 
     # 2. 构建Prompt（逻辑不变）
     prompt = f"""
@@ -337,8 +356,22 @@ def generate_report_node(state: Dict[str, Any]) -> Dict[str, Any]:
         api_key=API_KEY,
         base_url=OPENAI_COMPATIBLE_API_BASE,
     )
+    # 日志：记录报告阶段输入
+    log_model_event(
+        dialogue_id=dialogue_id,
+        stage="dataframe_report_input",
+        content={"prompt": prompt},
+    )
+
     response = llm.invoke(prompt)
     report = response.content
+
+    # 日志：记录报告阶段输出
+    log_model_event(
+        dialogue_id=dialogue_id,
+        stage="dataframe_report_output",
+        content={"report": report},
+    )
 
     # 4. 修正：返回字典格式（而非直接修改state），符合LangGraph节点规范
     return {"report": report}
@@ -367,29 +400,41 @@ def read_workspace_excel_schema_and_sample(
     preview_rows: int = 5,
 ) -> Dict[str, Any]:
     """
-    读取工作区 input 目录下所有 Excel 文件，返回每张表的 Schema 与样本数据（不做 LLM 分析）。
-    供 Planner 在规划前获取数据上下文。
-    :param input_dir_abs_path: input 目录的绝对路径
+    读取指定目录（通常为工作区根目录）下所有 Excel 文件（包含子目录），返回每张表的 Schema 与样本数据（不做 LLM 分析）。
+    供 Planner 与 Coder 获取数据上下文。
+    :param input_dir_abs_path: 目录绝对路径（通常为工作区根目录）
     :param preview_rows: 每表预览行数
     :return: {
-        "files": { "filename.xlsx": { "columns": [...], "dtypes": {...}, "shape": (r,c), "preview": [dict,...] } },
-        "summary": "共 N 个文件，..."
+        "files": {
+            "relative/path.xlsx": {
+                "relative_path": "relative/path.xlsx",
+                "columns": [...],
+                "dtypes": {...},
+                "shape": (r,c),
+                "preview": [dict,...]
+            },
+            ...
+        },
+        "summary": "共 N 个 Excel 文件，..."
     }
     """
     result: Dict[str, Any] = {"files": {}, "summary": ""}
     if not os.path.isdir(input_dir_abs_path):
-        result["summary"] = "input 目录不存在或不可读"
+        result["summary"] = "目录不存在或不可读"
         return result
 
     import glob
-    pattern = os.path.join(input_dir_abs_path, "*.xlsx")
-    xlsx_files = glob.glob(pattern)
+
+    # 递归查找所有 .xlsx，统一转换为相对于 input_dir_abs_path 的相对路径，供 LLM 直接使用
+    pattern = os.path.join(input_dir_abs_path, "**", "*.xlsx")
+    xlsx_files = glob.glob(pattern, recursive=True)
     for fp in xlsx_files:
-        fname = os.path.basename(fp)
+        rel_path = os.path.relpath(fp, input_dir_abs_path).replace(os.sep, "/")
         try:
             df = pd.read_excel(fp, header=None)
             if df.empty:
-                result["files"][fname] = {
+                result["files"][rel_path] = {
+                    "relative_path": rel_path,
                     "columns": [],
                     "dtypes": {},
                     "shape": (0, 0),
@@ -403,14 +448,20 @@ def read_workspace_excel_schema_and_sample(
             dtypes = df.dtypes.astype(str).to_dict()
             n_preview = min(preview_rows, len(df))
             preview = df.head(n_preview).to_dict("records") if n_preview else []
-            result["files"][fname] = {
+            result["files"][rel_path] = {
+                "relative_path": rel_path,
                 "columns": cols,
                 "dtypes": dtypes,
                 "shape": df.shape,
                 "preview": preview,
             }
         except Exception as e:
-            result["files"][fname] = {"error": str(e), "columns": [], "preview": []}
+            result["files"][rel_path] = {
+                "relative_path": rel_path,
+                "error": str(e),
+                "columns": [],
+                "preview": [],
+            }
 
     n = len(result["files"])
     result["summary"] = f"共 {n} 个 Excel 文件" if n else "未发现 .xlsx 文件"

@@ -77,7 +77,7 @@ def run_workspace_tasks(
     根据执行模式运行工作区内的代码文件。
     :param session_id: 会话 ID
     :param execution_mode: "simple" 单文件 | "complex" 多文件
-    :param code_file_paths: 相对路径列表（如 ["code/main.py"] 或 ["code/task_1.py", "code/task_2.py"]）
+    :param code_file_paths: 相对路径列表（如 ["main.py"] 或 ["task_1.py", "task_2.py"]）
     :param timeout_per_file: 每个文件执行超时（秒）
     :return: { "success", "results": [ run_python_in_workspace 的返回值, ... ], "logs", "error_messages" }
     """

@@ -8,9 +8,11 @@ pip install -r requirements.txt
 python -m ipykernel install --user --name agentPlatform --display-name "Python (agentPlatform)"
 
 ## 启动后端指令
-cd /data/agent_platform/src
+conda activate agentPlatform
+cd src 
 uvicorn backend.server:app --host 0.0.0.0 --port 52716
 
 ## 启动前端指令
-cd /data/agent_platform/src
+conda activate agentPlatform
+cd src
 streamlit run frontend/frontend.py

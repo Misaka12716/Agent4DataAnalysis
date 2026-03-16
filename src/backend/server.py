@@ -8,7 +8,13 @@ import asyncio
 import os
 from datetime import datetime
 from backend.console import ConsoleAgentWorkflow  # 保持原有导入
-from utils.workspace_manager import init_workspace
+from utils.workspace_manager import (
+    init_workspace,
+    resolve_workspace_root,
+    list_workspace_files,
+    generate_data_filename,
+)
+from utils.dataframe_reader import read_workspace_excel_schema_and_sample
 from db.session_store import SessionStore
 from planner.agent_planner import AgentPlanner
 from coder.workspace_coder import generate_and_write_code
@@ -91,7 +97,7 @@ async def streaming_task_generator(
                 task_result = plan_data["任务分配结果"]
                 tasks = task_result.get("tasks") or []
                 execution_mode = task_result.get("execution_mode", "simple")
-                code_file_paths = task_result.get("code_file_paths") or ["code/main.py"]
+                code_file_paths = task_result.get("code_file_paths") or ["main.py"]
                 planner_summary = json.dumps(
                     {"execution_mode": execution_mode, "tasks": tasks},
                     ensure_ascii=False,
@@ -108,7 +114,7 @@ async def streaming_task_generator(
                         "input_var_desc": (inp[0] if isinstance(inp, list) and inp else "输入数据"),
                         "output_var_name": "output_result",
                         "output_var_desc": (out[0] if isinstance(out, list) and out else "输出结果"),
-                        "relative_path": t.get("relative_path", "code/main.py"),
+                        "relative_path": t.get("relative_path", "main.py"),
                     })
                 if not code_specs and code_file_paths:
                     code_specs = [{
@@ -119,7 +125,13 @@ async def streaming_task_generator(
                         "output_var_desc": "输出",
                         "relative_path": code_file_paths[0],
                     }]
-                coder_results = generate_and_write_code(session_id, code_specs)
+                # 获取工作区文件列表与 Excel 结构，供 Coder 使用真实路径与格式
+                workspace_context = {}
+                workspace_root = resolve_workspace_root(session_id)
+                if workspace_root:
+                    workspace_context["file_list"] = list_workspace_files(session_id)
+                    workspace_context["excel_schema"] = read_workspace_excel_schema_and_sample(workspace_root)
+                coder_results = generate_and_write_code(session_id, code_specs, workspace_context=workspace_context)
                 yield _push(session_id, {"type": "coder", "data": coder_results})
 
                 # 3. Worker：在工作区内执行代码
@@ -129,7 +141,11 @@ async def streaming_task_generator(
                 yield _push(session_id, {"type": "worker", "data": worker_results})
 
                 # 4. Reporter：流式报告
-                async for chunk in stream_report(planner_summary, worker_results):
+                async for chunk in stream_report(
+                    planner_summary,
+                    worker_results,
+                    session_id=session_id,
+                ):
                     yield _push(session_id, {"type": "report_chunk", "content": chunk})
 
                 yield _push(session_id, {
@@ -201,7 +217,7 @@ async def session_upload_excel(
     user_id: int = Form(0),
 ):
     """
-    上传 Excel 到会话工作区。若该会话尚无工作区则先创建，文件保存到工作区的 input/ 子目录。
+    上传 Excel 到会话工作区。若该会话尚无工作区则先创建，文件保存到工作区根目录。
     并更新数据库中的会话工作区路径。
     """
     if not session_id.strip():
@@ -214,10 +230,9 @@ async def session_upload_excel(
     await file.seek(0)
 
     workspace_abs = init_workspace(session_id)
-    input_dir = os.path.join(workspace_abs, "input")
-    os.makedirs(input_dir, exist_ok=True)
-    safe_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename.replace(' ', '_')}"
-    save_path = os.path.join(input_dir, safe_name)
+    # 统一数据文件命名：data.xxx / data_1.xxx / data_2.xxx ...
+    safe_name = generate_data_filename(workspace_abs, file.filename or "")
+    save_path = os.path.join(workspace_abs, safe_name)
     try:
         with open(save_path, "wb") as f:
             while chunk := await file.read(1024 * 1024):
@@ -232,9 +247,9 @@ async def session_upload_excel(
     return JSONResponse(
         content={
             "status": "success",
-            "message": "文件已写入会话工作区 input/",
+            "message": "文件已写入会话工作区根目录",
             "session_id": session_id,
-            "relative_path": f"input/{safe_name}",
+            "relative_path": safe_name,
             "workspace_abs_path": workspace_abs,
         },
         status_code=200,

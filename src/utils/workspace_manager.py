@@ -9,9 +9,6 @@ from typing import Optional
 from utils.config import TEMP_FOLDER
 
 WORKSPACES_ROOT = os.path.join(TEMP_FOLDER, "workspaces")
-INPUT_SUBDIR = "input"
-OUTPUT_SUBDIR = "output"
-CODE_SUBDIR = "code"
 
 # 禁止相对路径逃逸
 FORBIDDEN_PREFIXES = ("../", "..\\")
@@ -34,10 +31,9 @@ def resolve_workspace_root(session_id: str) -> Optional[str]:
 
 def init_workspace(session_id: Optional[str] = None) -> str:
     """
-    为会话创建唯一工作区目录。
+    为会话创建唯一工作区目录（仅根目录，不创建 input/output/code 子目录）。
     - 若传入 session_id 则使用该 ID 作为目录名（用于已有会话绑定）；
     - 否则生成新的 UUID 作为 session_id 并创建目录。
-    目录结构: {WORKSPACES_ROOT}/{session_id}/input/, output/, code/
     返回: 工作区绝对路径
     """
     _ensure_workspaces_root()
@@ -45,17 +41,61 @@ def init_workspace(session_id: Optional[str] = None) -> str:
         session_id = str(uuid.uuid4())
     abs_path = os.path.join(WORKSPACES_ROOT, session_id)
     os.makedirs(abs_path, exist_ok=True)
-    for sub in (INPUT_SUBDIR, OUTPUT_SUBDIR, CODE_SUBDIR):
-        os.makedirs(os.path.join(abs_path, sub), exist_ok=True)
     return os.path.abspath(abs_path)
 
 
-def get_input_dir(session_id: str) -> Optional[str]:
-    """返回该会话 input 目录的绝对路径；工作区不存在则返回 None。"""
+def generate_data_filename(workspace_abs: str, original_filename: str) -> str:
+    """
+    根据工作区已有文件，生成统一的数据文件名：
+    - 第一个文件：data.扩展名（如 data.xlsx）
+    - 后续文件：data_1.扩展名、data_2.扩展名，依此类推
+
+    仅基于文件扩展名进行区分，文件名部分统一为 data / data_N。
+    """
+    # 提取原始扩展名（含点），若无扩展名则空字符串
+    _, ext = os.path.splitext(original_filename or "")
+    # 规范化扩展名为小写
+    ext = ext.lower()
+
+    # 已存在的同扩展名文件名集合，便于快速判断
+    try:
+        existing = {
+            name
+            for name in os.listdir(workspace_abs)
+            if os.path.isfile(os.path.join(workspace_abs, name))
+        }
+    except OSError:
+        existing = set()
+
+    # 优先使用 data.ext
+    base_name = f"data{ext}"
+    if base_name not in existing:
+        return base_name
+
+    # 否则从 data_1.ext 开始递增查找空位
+    index = 1
+    while True:
+        candidate = f"data_{index}{ext}"
+        if candidate not in existing:
+            return candidate
+        index += 1
+
+
+def list_workspace_files(session_id: str) -> list:
+    """
+    列出工作区根目录下所有文件的相对路径（不含子目录）。
+    工作区不存在或非目录时返回空列表。
+    """
     root = resolve_workspace_root(session_id)
     if not root:
-        return None
-    return os.path.join(root, INPUT_SUBDIR)
+        return []
+    try:
+        return [
+            name for name in os.listdir(root)
+            if os.path.isfile(os.path.join(root, name))
+        ]
+    except OSError:
+        return []
 
 
 def is_safe_relative_path(relative_path: str) -> bool:
