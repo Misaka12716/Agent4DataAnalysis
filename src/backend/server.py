@@ -7,7 +7,6 @@ import json
 import asyncio
 import os
 from datetime import datetime
-from backend.console import ConsoleAgentWorkflow  # 保持原有导入
 from utils.workspace_manager import (
     init_workspace,
     resolve_workspace_root,
@@ -160,39 +159,6 @@ async def streaming_task_generator(
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
 
-
-# -------------------------- 流式响应处理 --------------------------
-async def workflow_stream_generator(
-    input_data: str, file_info: str
-) -> AsyncGenerator[str, None]:
-    """工作流生成器（新增文件存在性校验警告）"""
-    # 新增：校验file_info中的文件是否存在（如果传入了文件路径）
-    if file_info != "No files uploaded" and not os.path.exists(file_info):
-        yield f"data: {json.dumps({
-            'type': 'workflow_warning',
-            'message': f'指定的文件不存在：{file_info}',
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }, ensure_ascii=False)}\n\n"
-
-    # 原有工作流逻辑
-    workflow = ConsoleAgentWorkflow()
-    try:
-        async for result in workflow.run_workflow(input_data, file_info):
-            yield f"data: {json.dumps(result, ensure_ascii=False)}\n\n"
-        yield f"data: {json.dumps({
-            'type': 'workflow_ended', 
-            'message': '工作流执行完成',
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        })}\n\n"
-    except Exception as e:
-        error_data = {
-            "type": "workflow_error",
-            "error": str(e),
-            "message": "工作流执行过程中发生错误",
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        print(f"[Error] 工作流执行失败：{str(e)}")
-        yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
 
 
 # -------------------------- API路由 --------------------------
