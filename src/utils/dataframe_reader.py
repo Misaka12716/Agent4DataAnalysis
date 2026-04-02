@@ -1,4 +1,5 @@
 import os
+import io
 import json
 import pandas as pd
 import numpy as np
@@ -23,7 +24,6 @@ from utils.model_logger import log_model_event
 SAMPLING_THRESHOLD = 1000
 SAMPLE_ROWS = 1000
 LLM_ANALYSIS_ROWS = 8
-PREVIEW_ROWS = 5
 
 
 # -------------------------- 状态结构 --------------------------
@@ -35,7 +35,6 @@ class AnalysisState(TypedDict, total=False):
     basic_info: Dict[str, Any]
     stats_info: Dict[str, Any]
     report: str
-    preview_rows: List[Dict]
     header_fix_info: str
     dialogue_id: str  # 可选，对话ID，用于日志文件命名
 
@@ -217,9 +216,6 @@ def preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     fixed_df, header_fix_info = fix_df_by_llm_result(raw_df, llm_result)
 
-    preview_n = min(PREVIEW_ROWS, len(fixed_df))
-    preview_rows = fixed_df.head(preview_n).to_dict("records")
-
     n_rows, n_cols = fixed_df.shape
     if n_rows > SAMPLING_THRESHOLD:
         sample_df = fixed_df.sample(n=min(SAMPLE_ROWS, n_rows), random_state=42)
@@ -240,14 +236,11 @@ def preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
             else "未抽样"
         ),
         "header_fix_info": header_fix_info,
-        "preview_rows_count": preview_n,
-        "preview_rows": preview_rows,
     }
 
     return {
         "fixed_df": fixed_df,
         "header_fix_info": header_fix_info,
-        "preview_rows": preview_rows,
         "sample_df": sample_df,
         "basic_info": basic_info,
     }
@@ -317,7 +310,6 @@ def generate_report_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # 1. 用字典键值方式访问state中的数据
     basic_info = state["basic_info"]
     stats_info = state["stats_info"]
-    preview_rows = state["preview_rows"]
     header_fix_info = state["header_fix_info"]
     dialogue_id = state.get("dialogue_id", "")
 
@@ -333,7 +325,6 @@ def generate_report_node(state: Dict[str, Any]) -> Dict[str, Any]:
 - 抽样信息：{basic_info['sampling_info']}
 - 表头修正详情：{header_fix_info}
 - 列名及数据类型：{basic_info['dtypes']}
-- 前{basic_info['preview_rows_count']}行预览数据：{preview_rows}
 
 ## 统计分析信息
 1. 缺失值比例（按列）：{stats_info['missing_values']}
@@ -344,7 +335,7 @@ def generate_report_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 ## 报告要求
 1. 语言简洁明了，分点说明；
-2. 重点突出：表头修正逻辑（尤其是嵌套/错位表头）、表格核心构成、前几行关键特征；
+2. 重点突出：表头修正逻辑（尤其是嵌套/错位表头）、表格核心构成、列类型与统计特征；
 3. 若为大表格，需说明分析基于抽样数据；
 4. 避免使用过于专业的术语，让非技术人员也能理解。
     """
@@ -397,13 +388,11 @@ def build_table_analysis_agent():
 # -------------------------- 工作区 Excel Schema/样本（供 Planner 规划前调用） --------------------------
 def read_workspace_excel_schema_and_sample(
     input_dir_abs_path: str,
-    preview_rows: int = 5,
 ) -> Dict[str, Any]:
     """
-    读取指定目录（通常为工作区根目录）下所有 Excel 文件（包含子目录），返回每张表的 Schema 与样本数据（不做 LLM 分析）。
+    读取指定目录（通常为工作区根目录）下所有 Excel 文件（包含子目录），返回每张表的 Schema 与 pandas info（不做 LLM 分析）。
     供 Planner 与 Coder 获取数据上下文。
     :param input_dir_abs_path: 目录绝对路径（通常为工作区根目录）
-    :param preview_rows: 每表预览行数
     :return: {
         "files": {
             "relative/path.xlsx": {
@@ -411,7 +400,7 @@ def read_workspace_excel_schema_and_sample(
                 "columns": [...],
                 "dtypes": {...},
                 "shape": (r,c),
-                "preview": [dict,...]
+                "pandas_info": "..."
             },
             ...
         },
@@ -438,7 +427,6 @@ def read_workspace_excel_schema_and_sample(
                     "columns": [],
                     "dtypes": {},
                     "shape": (0, 0),
-                    "preview": [],
                 }
                 continue
             # 第一行作为列名（简单策略；复杂表头可由后续 LLM 流程处理）
@@ -446,21 +434,24 @@ def read_workspace_excel_schema_and_sample(
             df = df.iloc[1:].reset_index(drop=True)
             cols = df.columns.tolist()
             dtypes = df.dtypes.astype(str).to_dict()
-            n_preview = min(preview_rows, len(df))
-            preview = df.head(n_preview).to_dict("records") if n_preview else []
+            buf = io.StringIO()
+            try:
+                df.info(buf=buf, memory_usage=False)
+                pandas_info = buf.getvalue()
+            except Exception:
+                pandas_info = ""
             result["files"][rel_path] = {
                 "relative_path": rel_path,
                 "columns": cols,
                 "dtypes": dtypes,
                 "shape": df.shape,
-                "preview": preview,
+                "pandas_info": pandas_info,
             }
         except Exception as e:
             result["files"][rel_path] = {
                 "relative_path": rel_path,
                 "error": str(e),
                 "columns": [],
-                "preview": [],
             }
 
     n = len(result["files"])

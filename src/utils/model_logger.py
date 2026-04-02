@@ -49,10 +49,7 @@ def log_model_event(dialogue_id: str, stage: str, content: Any) -> None:
 
     try:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            serialized = json.dumps(content, ensure_ascii=False)
-        except Exception:
-            serialized = str(content)
+        serialized = str(content)
 
         line = f"{ts} | {stage} | {dialogue_id or 'unknown'} | {serialized}\n"
         log_path = _get_log_file_path(dialogue_id)

@@ -1,5 +1,5 @@
 # coder/workspace_coder.py
-# 基于工作区的代码生成：根据 Planner 的规划生成代码并写入工作区（不执行）。
+# 基于工作区的代码生成：按（数据文件信息 / 需求解析 / 步骤分解）三段输入生成**单个** Python 文件并写入工作区（不执行）。
 # 使用 configs.prompts 与 utils.workspace_file_ops，路径均为相对路径。
 
 import re
@@ -10,7 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from utils.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_CODER_MODEL
-from configs.prompts import get_coder_system_prompt
+from configs.prompts import get_coder_system_prompt, get_user_prompt
 from utils.workspace_file_ops import create_python_file
 from utils.model_logger import log_model_event
 
@@ -30,7 +30,7 @@ def _format_workspace_files_info(workspace_context: Optional[Dict[str, Any]], la
         lines.append(json.dumps(file_list, ensure_ascii=False))
         files_detail = excel_schema.get("files") or {}
         if files_detail:
-            lines.append("其中 Excel 文件的结构与样本（列名、类型、前几行）如下，读取时请按此格式使用：")
+            lines.append("其中 Excel 文件的结构、样本与 pandas.DataFrame.info() 摘要如下，读取时请按此格式使用：")
             lines.append(json.dumps(files_detail, ensure_ascii=False, default=str, indent=2))
     else:
         lines.append("## Workspace files and data format (you must use these real paths and formats; do not fabricate paths or data)")
@@ -55,31 +55,37 @@ def clean_code_from_markdown(code_str: str) -> str:
 
 def _generate_code_for_task(
     task_desc: str,
-    input_var_name: str,
-    input_var_desc: str,
-    output_var_name: str,
-    output_var_desc: str,
     lang: str = "zh",
     workspace_context: Optional[Dict[str, Any]] = None,
     dialogue_id: str = "",
+    requirement_analysis: str = "",
+    steps_outline: str = "",
 ) -> str:
-    """根据单任务描述生成纯 Python 代码（不写文件）。"""
-    # 使用专门的 Coder system 提示，强制包含 demo 测试逻辑（即实际执行入口）
-    system_prompt = get_coder_system_prompt(
+    """根据（一）数据文件信息（二）需求解析（三）步骤分解生成纯 Python 代码（不写文件）。"""
+    system_prompt = get_coder_system_prompt("generate", lang=lang)
+    workspace_files_info = _format_workspace_files_info(workspace_context, lang)
+    if not workspace_files_info.strip():
+        workspace_files_info = (
+            "（当前工作区无可用文件列表或 Excel 结构，请仅依据下方需求与步骤合理假设路径；若无法假设则报错说明。）"
+            if lang == "zh"
+            else "(No file list or Excel schema in workspace; infer paths from steps or fail clearly.)"
+        )
+    ra = (requirement_analysis or "").strip()
+    so = (steps_outline or "").strip()
+    if not ra and not so and (task_desc or "").strip():
+        ra = (task_desc or "").strip()
+        so = "（无单独步骤分解，请根据需求解析整体实现。）" if lang == "zh" else "(No separate step outline; implement from analysis.)"
+    user_body = get_user_prompt(
+        "coder",
         "generate",
         lang=lang,
-        input_var_name=input_var_name,
-        input_var_desc=input_var_desc,
-        output_var_name=output_var_name,
-        output_var_desc=output_var_desc,
+        data_file_info=workspace_files_info,
+        requirement_analysis=ra or "（空）",
+        steps_outline=so or "（空）",
     )
-    workspace_files_info = _format_workspace_files_info(workspace_context, lang)
-    user_template = "任务要求：{task_desc}"
-    if workspace_files_info:
-        user_template += "\n\n{workspace_files_info}"
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
-        ("user", user_template),
+        ("user", "{user_body}"),
     ])
     llm = ChatOpenAI(
         model=DEFAULT_CODER_MODEL,
@@ -88,25 +94,13 @@ def _generate_code_for_task(
         base_url=OPENAI_COMPATIBLE_API_BASE,
     )
     chain = prompt | llm | StrOutputParser()
-    payload = {
-        "task_desc": task_desc,
-        "input_var_name": input_var_name,
-        "input_var_desc": input_var_desc,
-        "output_var_name": output_var_name,
-        "output_var_desc": output_var_desc,
-    }
-    if workspace_files_info:
-        payload["workspace_files_info"] = workspace_files_info
+    payload = {"user_body": user_body}
 
     # 日志：记录 Coder 阶段输入
     log_model_event(
         dialogue_id=dialogue_id,
         stage="coder_generate_input",
-        content={
-            "system_prompt": system_prompt,
-            "workspace_files_info": workspace_files_info,
-            "payload": payload,
-        },
+        content= user_body,
     )
 
     raw = chain.invoke(payload)
@@ -115,7 +109,7 @@ def _generate_code_for_task(
     log_model_event(
         dialogue_id=dialogue_id,
         stage="coder_generate_output",
-        content={"raw_output": raw},
+        content= raw,
     )
 
     return clean_code_from_markdown(raw)
@@ -130,8 +124,8 @@ def generate_and_write_code(
     """
     根据规划生成代码并写入工作区。
     :param session_id: 会话 ID，用于解析工作区
-    :param code_specs: 每个元素至少包含 task_desc, input_var_name, input_var_desc,
-                       output_var_name, output_var_desc, relative_path (如 "task_1.py")
+    :param code_specs: 每个元素含 requirement_analysis、steps_outline（来自 Planner 两步输出），
+                       可选 task_desc 作回退；relative_path 一般为 main.py
     :param lang: 提示词语言
     :param workspace_context: 可选，工作区文件列表与 Excel 结构，供 Coder 使用真实路径与格式
     :return: [ {"relative_path": str, "success": bool, "error": str|None }, ... ]
@@ -142,20 +136,16 @@ def generate_and_write_code(
         if not rel_path.endswith(".py"):
             rel_path = rel_path.rstrip("/") + ".py"
         task_desc = spec.get("task_desc", "")
-        input_name = spec.get("input_var_name", "input_data")
-        input_desc = spec.get("input_var_desc", "输入数据")
-        output_name = spec.get("output_var_name", "output_result")
-        output_desc = spec.get("output_var_desc", "输出结果")
+        req_a = spec.get("requirement_analysis", "")
+        steps_o = spec.get("steps_outline", "")
         try:
             code = _generate_code_for_task(
                 task_desc=task_desc,
-                input_var_name=input_name,
-                input_var_desc=input_desc,
-                output_var_name=output_name,
-                output_var_desc=output_desc,
                 lang=lang,
                 workspace_context=workspace_context,
                 dialogue_id=session_id,
+                requirement_analysis=req_a,
+                steps_outline=steps_o,
             )
             ok = create_python_file(session_id, rel_path, code, overwrite=True)
             results.append({

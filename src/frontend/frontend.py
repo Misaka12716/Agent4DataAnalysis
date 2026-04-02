@@ -134,7 +134,7 @@ with tab3:
                                 st.caption(f"已接收 {len(log_events)} 条事件，报告片段 {len(''.join(report_parts))} 字")
                                 if report_parts:
                                     st.markdown("---\n**报告内容（流式）**\n")
-                                    st.text("".join(report_parts))
+                                    st.markdown("".join(report_parts))
                         except json.JSONDecodeError:
                             log_events.append({"raw": line[:200]})
             except httpx.HTTPStatusError as e:
@@ -142,9 +142,9 @@ with tab3:
             except Exception as e:
                 st.error(str(e))
             # 结束后展示完整报告与事件列表
-            if report_parts:
-                st.subheader("最终报告")
-                st.markdown("".join(report_parts))
+            # if report_parts:
+            #     st.subheader("最终报告")
+            #     st.markdown("".join(report_parts))
             if log_events:
                 with st.expander("查看全部 SSE 事件"):
                     st.json(log_events)

@@ -51,17 +51,9 @@ async def stream_report(
     log_model_event(
         dialogue_id=session_id or "",
         stage="reporter_input",
-        content={
-            "planner_summary": planner_summary,
-            "worker_results_brief": {
-                "success": worker_results.get("success"),
-                "has_logs": bool(worker_results.get("logs")),
-                "error_messages": worker_results.get("error_messages"),
-            },
-            "system_prompt": system_prompt,
-            "user_prompt": user_prompt,
-        },
+        content= system_prompt + "\n\n" + user_prompt,
     )
+    
     llm = ChatOpenAI(
         model=DEFAULT_MODEL,
         temperature=0.3,
@@ -69,13 +61,15 @@ async def stream_report(
         base_url=OPENAI_COMPATIBLE_API_BASE,
         streaming=True,
     )
+    
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
-        ("human", "{input}"),
+        ("user", "{user_prompt}"),
     ])
+    
     chain = prompt | llm
     full_output = ""
-    async for chunk in chain.astream({"input": user_prompt}):
+    async for chunk in chain.astream({"user_prompt": user_prompt}):
         content = chunk.content if hasattr(chunk, "content") else chunk.get("content", "")
         if content:
             full_output += content
@@ -85,5 +79,5 @@ async def stream_report(
     log_model_event(
         dialogue_id=session_id or "",
         stage="reporter_output",
-        content={"full_output": full_output},
+        content= full_output,
     )

@@ -1,30 +1,21 @@
-# 使用 LangGraph 定义规划器流程，便于阅读与维护
+# 使用 LangGraph 定义规划器流程：两步 LangChain 链路——需求解析 → 步骤分解（均不写具体代码）。
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from configs.prompts import get_system_prompt, get_user_prompt
+from langchain_core.prompts import ChatPromptTemplate
+from configs.prompts import (
+    get_user_prompt,
+    get_planner_step_system_prompt,
+)
 from utils.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
 from utils.model_logger import log_model_event
 from utils.workspace_manager import resolve_workspace_root
 from utils.dataframe_reader import read_workspace_excel_schema_and_sample
 from db.session_store import SessionStore
 
-from typing import Dict, Any, AsyncGenerator, Optional, List
-from langchain_core.messages import BaseMessage
+from typing import Dict, Any, AsyncGenerator, Optional
 import asyncio
 import json
 import os
-import json_repair
-
-
-def _parse_thinking_and_content(raw: str) -> tuple[str, str]:
-    """从模型原始输出中分离 <think>...</think> 与正文。"""
-    if "</think>" in raw and raw.strip().startswith("<think>"):
-        idx = raw.find("</think>")
-        thinking = raw[7:idx].strip()
-        content = raw[idx + 8:].strip()
-        return thinking, content
-    return "", raw.strip()
 
 
 def _create_llm(streaming: bool = True) -> ChatOpenAI:
@@ -38,216 +29,208 @@ def _create_llm(streaming: bool = True) -> ChatOpenAI:
     )
 
 
-# -------------------------- 节点内：需求结构化 --------------------------
-async def _node_req_analysis(state: Dict[str, Any]) -> Dict[str, Any]:
-    """节点：解析用户需求，产出结构化需求 JSON。"""
+def _combine_plan_text(requirement_analysis: str, steps_outline: str) -> str:
+    ra = (requirement_analysis or "").strip()
+    so = (steps_outline or "").strip()
+    if not ra and not so:
+        return ""
+    return f"## 需求解析\n\n{ra}\n\n## 步骤分解\n\n{so}"
+
+
+async def _run_planner_chain_stream(
+    *,
+    system: str,
+    user: str,
+    session_id: str,
+    stage_base: str,
+    stream_callback,
+) -> str:
+    """LangChain：ChatPromptTemplate | LLM，流式聚合全文。"""
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", "{system}"),
+            ("human", "{user}"),
+        ]
+    )
+    llm = _create_llm(streaming=True)
+    chain = prompt | llm
+
+    log_model_event(
+        dialogue_id=session_id,
+        stage=f"{stage_base}_input",
+        content=user,
+    )
+
+    full_content = ""
+    async for chunk in chain.astream({"system": system, "user": user}):
+        token = chunk.content if hasattr(chunk, "content") else getattr(chunk, "content", "") or ""
+        if not token:
+            continue
+        full_content += token
+        if stream_callback:
+            await stream_callback("llm_chunk", {"content": token})
+
+    log_model_event(
+        dialogue_id=session_id,
+        stage=f"{stage_base}_output",
+        content=full_content,
+    )
+    if stream_callback:
+        await stream_callback("llm_complete", {"content": full_content})
+
+    return full_content.strip()
+
+
+def _finalize_plan_from_graph_state(state: Optional[Dict[str, Any]]) -> tuple[str, Optional[str], str, str]:
+    """
+    从图结束状态取出 plan_text、error、requirement_analysis、steps_outline。
+    """
+    if not state:
+        return "", "规划流程未返回状态", "", ""
+    err = state.get("error")
+    ra = "" if state.get("requirement_analysis") is None else str(state.get("requirement_analysis")).strip()
+    so = "" if state.get("steps_outline") is None else str(state.get("steps_outline")).strip()
+    pt = state.get("plan_text")
+    pt = "" if pt is None else str(pt).strip()
+    if not pt and (ra or so):
+        pt = _combine_plan_text(ra, so)
+    return pt, err if err else None, ra, so
+
+
+def _route_after_analyze(state: Dict[str, Any]) -> str:
+    if state.get("error"):
+        return "end"
+    return "decompose"
+
+
+# -------------------------- 节点：第一步 需求解析 --------------------------
+async def _node_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
     cb = state.get("stream_callback")
-    session_id = state.get("session_id", "")  # 用于日志中的对话ID
-    messages: List[BaseMessage] = state.get("messages") or []
+    session_id = state.get("session_id", "")
     lang = state.get("lang", "zh")
     input_data = state["input_requirement"]
     file_info = state.get("file_info") or "No files uploaded"
 
     if cb:
-        await cb("state", {"node": "req_analysis"})
+        await cb("state", {"node": "analyze"})
 
     user_prompt = get_user_prompt(
-        "planner", "req_analysis", lang=lang,
+        "planner",
+        "analyze_requirement",
+        lang=lang,
         input_data=input_data,
         file_info=file_info,
     )
-    full_content = ""
+    system = get_planner_step_system_prompt("analyze", lang=lang)
 
-    # 日志：记录模型输入
-    log_model_event(
-        dialogue_id=session_id,
-        stage="planner_req_analysis_input",
-        content={
+    full_content = await _run_planner_chain_stream(
+        system=system,
+        user=user_prompt.strip(),
+        session_id=session_id,
+        stage_base="planner_analyze",
+        stream_callback=cb,
+    )
+
+    if not full_content:
+        return {
+            "requirement_analysis": None,
+            "error": "规划失败：需求解析输出为空",
             "input_requirement": input_data,
             "file_info": file_info,
-            "user_prompt": user_prompt,
-        },
-    )
+            "lang": lang,
+            "session_id": session_id,
+            "stream_callback": cb,
+        }
 
-    llm = _create_llm(streaming=True)
-    chat_messages = messages + [HumanMessage(content=user_prompt.strip())]
-
-    async for chunk in llm.astream(chat_messages):
-        token = chunk.content if hasattr(chunk, "content") else chunk.get("content", "") or ""
-        if not token:
-            continue
-        full_content += token
-        if cb:
-            await cb("llm_chunk", {"content": token})
-
-    thinking, content = _parse_thinking_and_content(full_content)
-
-    # 日志：记录模型原始输出与解析结果
-    log_model_event(
-        dialogue_id=session_id,
-        stage="planner_req_analysis_output",
-        content={
-            "raw_output": full_content,
-            "thinking": thinking,
-            "content": content,
-        },
-    )
-    if cb:
-        await cb("llm_complete", {"content": content, "thinking": thinking})
-
-    new_messages = messages + [HumanMessage(content=user_prompt.strip()), AIMessage(content=full_content)]
-
-    try:
-        repaired = json_repair.repair_json(content)
-        structured_req = json.loads(repaired)
-        return {"structured_req": structured_req, "messages": new_messages, "error": None}
-    except Exception as e:
-        return {"structured_req": None, "messages": new_messages, "error": f"需求解析失败：{str(e)}"}
+    return {
+        "requirement_analysis": full_content,
+        "error": None,
+        "input_requirement": input_data,
+        "file_info": file_info,
+        "lang": lang,
+        "session_id": session_id,
+        "stream_callback": cb,
+    }
 
 
-# -------------------------- 节点内：任务分解与分配 --------------------------
-async def _node_assign_tasks(state: Dict[str, Any]) -> Dict[str, Any]:
-    """节点：根据结构化需求分解为子任务列表。"""
+# -------------------------- 节点：第二步 步骤分解 --------------------------
+async def _node_decompose(state: Dict[str, Any]) -> Dict[str, Any]:
     cb = state.get("stream_callback")
-    session_id = state.get("session_id", "")  # 用于日志中的对话ID
-    messages: List[BaseMessage] = state.get("messages") or []
+    session_id = state.get("session_id", "")
     lang = state.get("lang", "zh")
-    requirement = state.get("structured_req")
-    if not requirement:
-        return {"tasks": None, "error": "缺少结构化需求"}
+    input_data = (state.get("input_requirement") or "").strip()
+    file_info = state.get("file_info") or "No files uploaded"
+    requirement_analysis = (state.get("requirement_analysis") or "").strip()
+
+    if not input_data:
+        return {
+            "steps_outline": None,
+            "plan_text": None,
+            "error": "规划失败：步骤分解缺少 input_requirement",
+        }
 
     if cb:
-        await cb("state", {"node": "assign_tasks"})
+        await cb("state", {"node": "decompose"})
 
     user_prompt = get_user_prompt(
-        "planner", "assign_tasks", lang=lang,
-        structured_req=requirement,
+        "planner",
+        "decompose_steps",
+        lang=lang,
+        input_data=input_data,
+        file_info=file_info,
+        requirement_analysis=requirement_analysis,
     )
-    full_content = ""
+    system = get_planner_step_system_prompt("decompose", lang=lang)
 
-    # 日志：记录任务分解阶段输入
-    log_model_event(
-        dialogue_id=session_id,
-        stage="planner_assign_tasks_input",
-        content={
-            "structured_requirement": requirement,
-            "user_prompt": user_prompt,
-        },
+    full_content = await _run_planner_chain_stream(
+        system=system,
+        user=user_prompt.strip(),
+        session_id=session_id,
+        stage_base="planner_decompose",
+        stream_callback=cb,
     )
 
-    llm = _create_llm(streaming=True)
-    chat_messages = messages + [HumanMessage(content=user_prompt)]
+    if not full_content:
+        return {
+            "steps_outline": None,
+            "plan_text": None,
+            "error": "规划失败：步骤分解输出为空",
+        }
 
-    async for chunk in llm.astream(chat_messages):
-        token = chunk.content if hasattr(chunk, "content") else chunk.get("content", "") or ""
-        if not token:
-            continue
-        full_content += token
-        if cb:
-            await cb("llm_chunk", {"content": token})
-
-    thinking, content = _parse_thinking_and_content(full_content)
-
-    # 日志：记录任务分解阶段原始输出与解析结果
-    log_model_event(
-        dialogue_id=session_id,
-        stage="planner_assign_tasks_output",
-        content={
-            "raw_output": full_content,
-            "thinking": thinking,
-            "content": content,
-        },
-    )
-    if cb:
-        await cb("llm_complete", {"content": content, "thinking": thinking})
-
-    new_messages = messages + [HumanMessage(content=user_prompt), AIMessage(content=full_content)]
-
-    try:
-        cleaned = content.replace("```json", "").replace("```", "").strip()
-        repaired = json_repair.repair_json(cleaned)
-        tasks = json.loads(repaired)
-        if not isinstance(tasks, list):
-            raise ValueError("输出必须为JSON数组")
-        if len(tasks) > 10:
-            raise ValueError(f"子任务数量超过限制：{len(tasks)} > 10")
-
-        required = [
-            "task_id", "task_name", "description",
-            "dependencies", "worker_type", "input", "output",
-        ]
-        task_ids = []
-        for task in tasks:
-            if not isinstance(task, dict):
-                continue
-            if "task_name" not in task or not str(task.get("task_name", "")).strip():
-                task["task_name"] = (
-                    task.get("name")
-                    or task.get("任务名称")
-                    or (str(task.get("description", ""))[:20] if task.get("description") else None)
-                    or f"任务{task.get('task_id', '?')}"
-                )
-            if "input" not in task:
-                task["input"] = task.get("input", [])
-            if "output" not in task:
-                task["output"] = task.get("output", [])
-            if not isinstance(task.get("input"), list):
-                task["input"] = [task["input"]] if task.get("input") else []
-            if not isinstance(task.get("output"), list):
-                task["output"] = [task["output"]] if task.get("output") else []
-
-            missing = [f for f in required if f not in task]
-            if missing:
-                raise ValueError(f"子任务缺少字段：{missing}")
-            tid = task["task_id"]
-            if tid in task_ids:
-                raise ValueError(f"重复task_id：{tid}")
-            task_ids.append(tid)
-
-        # 日志：记录解析后的任务列表
-        log_model_event(
-            dialogue_id=session_id,
-            stage="planner_assign_tasks_parsed",
-            content={"tasks": tasks},
-        )
-
-        return {"tasks": tasks, "messages": new_messages, "error": None}
-    except Exception as e:
-        return {"tasks": None, "messages": new_messages, "error": f"任务分解失败：{str(e)}"}
-
-
-def _route_after_req_analysis(state: Dict[str, Any]) -> str:
-    """req_analysis 之后：有错误则结束，否则进入任务分解。"""
-    if state.get("error"):
-        return "end"
-    return "assign_tasks"
+    steps_outline = full_content
+    plan_text = _combine_plan_text(requirement_analysis, steps_outline)
+    return {
+        "requirement_analysis": requirement_analysis,
+        "steps_outline": steps_outline,
+        "plan_text": plan_text,
+        "error": None,
+    }
 
 
 def _build_planner_graph():
-    """构建 LangGraph：req_analysis -> [assign_tasks | END] -> END。"""
+    """LangGraph：analyze -> (条件) decompose -> END 或 analyze 失败 -> END。"""
     graph_builder = StateGraph(dict)
-    graph_builder.add_node("req_analysis", _node_req_analysis)
-    graph_builder.add_node("assign_tasks", _node_assign_tasks)
-    graph_builder.set_entry_point("req_analysis")
+    graph_builder.add_node("analyze", _node_analyze)
+    graph_builder.add_node("decompose", _node_decompose)
+    graph_builder.set_entry_point("analyze")
     graph_builder.add_conditional_edges(
-        "req_analysis",
-        _route_after_req_analysis,
-        path_map={"assign_tasks": "assign_tasks", "end": END},
+        "analyze",
+        _route_after_analyze,
+        {"decompose": "decompose", "end": END},
     )
-    graph_builder.add_edge("assign_tasks", END)
+    graph_builder.add_edge("decompose", END)
     return graph_builder.compile()
 
 
 # -------------------------- AgentPlanner 类 --------------------------
 class AgentPlanner:
     """
-    多智能体规划器（LangGraph 版）
-    流程：需求结构化 -> 任务分解分配；仅 yield 关键 LLM 内容与少量状态信息。
+    规划器：两步 LangChain 调用——需求解析、步骤分解。
+    仅负责规划输出，不负责任务分配。
     """
 
     def __init__(self):
         self.lang = "zh"
-        self.system_prompt = get_system_prompt("planner", self.lang)
         self._closed = False
         self._graph = _build_planner_graph()
 
@@ -294,9 +277,9 @@ class AgentPlanner:
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         运行规划流程，仅 yield：
-        - state：每个节点开始时一条
-        - llm_chunk / llm_complete：关键 LLM 输出
-        - stage_result：最终结果（与原有 data 结构兼容）
+        - state：节点开始时一条（node: analyze | decompose）
+        - llm_chunk / llm_complete：LLM 输出
+        - stage_result：最终规划结果
         - error：异常时
         """
         queue: asyncio.Queue = asyncio.Queue()
@@ -312,13 +295,11 @@ class AgentPlanner:
                 initial = {
                     "input_requirement": input_requirement,
                     "file_info": file_info,
-                    "messages": [SystemMessage(content=self.system_prompt)],
                     "lang": self.lang,
                     "stream_callback": stream_callback,
                     "session_id": session_id,
                 }
-                async for state in self._graph.astream(initial):
-                    final_state = state
+                final_state = await self._graph.ainvoke(initial)
                 await queue.put(("done", None))
             except Exception as e:
                 run_error = str(e)
@@ -357,44 +338,18 @@ class AgentPlanner:
             yield {"type": "error", "message": run_error}
             return
 
-        if not final_state:
-            yield {"type": "error", "message": "规划流程未返回状态"}
-            return
-
-        err = final_state.get("error")
+        plan_text, err, req_analysis, steps_outline = _finalize_plan_from_graph_state(final_state)
         if err:
             yield {"type": "error", "message": err}
             return
-
-        structured_req = final_state.get("structured_req")
-        tasks_list = final_state.get("tasks") or []
-        execution_mode = "simple" if len(tasks_list) <= 1 else "complex"
-        code_file_paths = (
-            ["main.py"]
-            if execution_mode == "simple"
-            else [f"task_{t.get('task_id', i)}.py" for i, t in enumerate(tasks_list, 1)]
-        )
-        for i, t in enumerate(tasks_list):
-            t["relative_path"] = (
-                code_file_paths[i] if i < len(code_file_paths) else f"task_{t.get('task_id', i)}.py"
-            )
-
-        task_assign_result = {
-            "tasks": tasks_list,
-            "total_tasks": len(tasks_list),
-            "success": True,
-            "execution_mode": execution_mode,
-            "code_file_paths": code_file_paths,
-        }
         result = {
             "输入需求": input_requirement,
-            "结构化需求": structured_req,
-            "任务分配结果": task_assign_result,
+            "规划全文": plan_text,
+            "需求解析": req_analysis,
+            "步骤分解": steps_outline,
             "执行成功": True,
             "错误信息": None,
         }
-        result["execution_mode"] = execution_mode
-        result["code_file_paths"] = code_file_paths
 
         yield {
             "type": "stage_result",
@@ -410,15 +365,15 @@ if __name__ == "__main__":
         async with AgentPlanner() as planner:
             test_input = "根据 excel 各列对各行分类，生成包含分类结果的新表格。"
             async for ev in planner.run_flow(test_input, "No files uploaded"):
-                    if ev.get("type") == "state":
-                        print(f"[状态] {ev.get('node')}")
-                    elif ev.get("type") == "llm_chunk":
-                        print(ev.get("content", ""), end="", flush=True)
-                    elif ev.get("type") == "llm_complete":
-                        print("\n[LLM 完成]")
-                    elif ev.get("type") == "stage_result":
-                        print("结果:", ev.get("data", {}).keys())
-                    elif ev.get("type") == "error":
-                        print("错误:", ev.get("message"))
+                if ev.get("type") == "state":
+                    print(f"[状态] {ev.get('node')}")
+                elif ev.get("type") == "llm_chunk":
+                    print(ev.get("content", ""), end="", flush=True)
+                elif ev.get("type") == "llm_complete":
+                    print("\n[LLM 完成]")
+                elif ev.get("type") == "stage_result":
+                    print("结果:", ev.get("data", {}).keys())
+                elif ev.get("type") == "error":
+                    print("错误:", ev.get("message"))
 
     asyncio.run(test_planner())

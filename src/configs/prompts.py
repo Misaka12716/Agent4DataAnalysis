@@ -13,16 +13,14 @@ _WORKSPACE_PATH_NOTE_EN = (
     "You are operating in an isolated workspace; use relative paths for all file paths (no absolute paths or path traversal like ../)."
 )
 
-# -------------------------- Planner --------------------------
-SYSTEM_PROMPT_PLANNER_ZH = f"""你是一位数据分析任务的规划助手。
-输出规则：严格遵循用户指定格式输出，未知内容留空。
-注意：不编造任何信息；不推荐任何未提及的工具。
+# -------------------------- Planner（两步：需求解析 → 步骤分解；均不写具体代码） --------------------------
+SYSTEM_PROMPT_PLANNER_ZH = f"""你是一位数据分析任务的规划助手。规划分两步完成：先理解需求，再分解步骤。程序员会在**一个** Python 文件中实现；你只需把需求说清楚、把步骤拆到「阶段/环节」粒度，不要细化到函数名、变量名或逐行伪代码。
+不清楚或未知之处如实说明，不要臆造；不编造任何信息；不推荐任何未提及的工具。
 {_WORKSPACE_PATH_NOTE_ZH}
 """
 
-SYSTEM_PROMPT_PLANNER_EN = f"""You are a planning assistant for data analysis tasks.
-Output rules: Strictly adhere to the output format specified by the user; leave unknown content blank.
-Note: Do not fabricate any information; do not recommend any unmentioned tools.
+SYSTEM_PROMPT_PLANNER_EN = f"""You are a planning assistant for data analysis tasks. Planning happens in two phases: understand the requirement, then outline steps. A single Python file will implement everything—you clarify requirements and break work into phase-level steps, not function names, variable names, or line-by-line pseudocode.
+State unknowns honestly; do not fabricate; do not recommend unmentioned tools.
 {_WORKSPACE_PATH_NOTE_EN}
 """
 
@@ -31,14 +29,37 @@ SYSTEM_PROMPT_PLANNER = {
     "en": SYSTEM_PROMPT_PLANNER_EN,
 }
 
+# Planner 第一步：仅解析用户需求与数据/输出语义（不写实现步骤）
+SYSTEM_PROMPT_PLANNER_ANALYZE_ZH = f"""你是数据分析任务的需求解析助手（规划流程的**第一步**）。只负责：理解用户想做什么、输入数据含义与约束、期望输出形态；**不要**写实现步骤、不要写代码或伪代码。
+凡涉及具体数据文件，只能依据下方「工作区数据文件信息」中的相对路径与字段，勿臆造路径或列名。
+{_WORKSPACE_PATH_NOTE_ZH}
+"""
+SYSTEM_PROMPT_PLANNER_ANALYZE_EN = f"""You parse the user's requirement (planning **step 1 only**). Cover: goal, data meaning and constraints, expected output shape—**do not** list implementation steps or any code/pseudocode.
+For files, use only relative paths and fields from the workspace file section below—no invented paths or columns.
+{_WORKSPACE_PATH_NOTE_EN}
+"""
+
+# Planner 第二步：在已有需求解析基础上做步骤分解（粗粒度，不写代码）
+SYSTEM_PROMPT_PLANNER_DECOMPOSE_ZH = f"""你是数据分析任务的步骤分解助手（规划流程的**第二步**）。你会看到上一步的「需求解析」全文；你的任务是把任务拆成**若干顺序阶段**（如：读入与校验 → 清洗/变换 → 分析或规则 → 输出或展示），粒度到环节即可，**不要**细化到具体库调用、函数名、变量名或逐行实现。
+{_WORKSPACE_PATH_NOTE_ZH}
+"""
+SYSTEM_PROMPT_PLANNER_DECOMPOSE_EN = f"""You decompose the task into **sequential phases** (planning **step 2**), given the prior requirement analysis. Use phase-level steps only (e.g. load/validate → transform → analyze → output)—**not** library calls, function names, variables, or line-by-line implementation.
+{_WORKSPACE_PATH_NOTE_EN}
+"""
+
+PLANNER_STEP_SYSTEM_PROMPTS = {
+    "analyze": {"zh": SYSTEM_PROMPT_PLANNER_ANALYZE_ZH, "en": SYSTEM_PROMPT_PLANNER_ANALYZE_EN},
+    "decompose": {"zh": SYSTEM_PROMPT_PLANNER_DECOMPOSE_ZH, "en": SYSTEM_PROMPT_PLANNER_DECOMPOSE_EN},
+}
+
 # -------------------------- Coder --------------------------
-SYSTEM_PROMPT_CODER_ZH = f"""你是专业的 Python 程序员，需根据任务要求生成规范、可运行的 Python 代码。
-规则概要：代码需包含必要的 import、封装清晰的函数（使用指定的输入/输出变量名）、以及可选的测试逻辑；保证可运行、无语法错误、符合 Python 最佳实践；仅返回纯代码，不要 markdown 或多余说明。
+SYSTEM_PROMPT_CODER_ZH = f"""你是专业的 Python 程序员。你会收到：工作区数据文件信息、Planner 需求解析、Planner 步骤分解；请在**一个** Python 文件中完成全部功能。
+写出可直接运行的完整脚本：必要 import、用约定变量名承载输入输出、核心逻辑清晰，并在末尾或 main 中从工作区真实数据读入、执行并展示结果。除代码外不要用大段说明代替实现。
 {_WORKSPACE_PATH_NOTE_ZH}
 """
 
-SYSTEM_PROMPT_CODER_EN = f"""You are a professional Python programmer; generate standardized, runnable Python code according to task requirements.
-Rules: Code must include necessary imports, a clear function (using the specified input/output variable names), and optional test logic; ensure it is runnable, syntax-error-free, and follows Python best practices; return only pure code, no markdown or extra explanation.
+SYSTEM_PROMPT_CODER_EN = f"""You are a professional Python programmer. You receive workspace data details, Planner requirement analysis, and Planner step outline—implement everything in **one** Python file.
+Write one complete runnable script: imports, agreed I/O variables, clear core logic, and an entry that reads workspace data, runs, and shows results. Do not replace code with long prose.
 {_WORKSPACE_PATH_NOTE_EN}
 """
 
@@ -47,61 +68,47 @@ SYSTEM_PROMPT_CODER = {
     "en": SYSTEM_PROMPT_CODER_EN,
 }
 
-# Coder - 代码生成（generate）专用 system
-CODER_GENERATE_SYSTEM_ZH = """你是专业的Python程序员，需要根据任务要求生成规范的Python代码，严格遵循以下规则：
-1. 代码包含且仅包含以下三部分内容（按顺序整合在一个代码块中）：
-   - 第一部分：仅包含必要的import语句（不要多余库）；
-   - 第二部分：封装一个完整的函数，函数名清晰（如task_xxx），严格使用指定的输入/输出变量名：
-     - 输入变量名：{input_var_name}（说明：{input_var_desc}）
-     - 输出变量名：{output_var_name}（说明：{output_var_desc}）
-     函数必须有清晰的文档字符串（说明功能、参数、返回值），参数和返回值严格匹配指定变量名；
-   - 第三部分：demo测试代码，必须基于下方「工作区文件列表与格式」中的真实文件路径与格式读取数据作为输入，调用函数并打印{output_var_name}；禁止编造假数据或假文件路径；
-2. 输入必须使用工作区中真实存在的数据文件路径与格式（相对路径，执行时 cwd 为工作区根目录），不得臆造文件名；
-3. 代码必须可运行，无语法错误，符合Python最佳实践；
-4. 不要添加任何多余内容（如markdown、注释说明、分隔符等），仅返回纯Python代码；
-5. 确保代码缩进正确，格式规范。
+# Coder - 代码生成（generate）专用 system：三段输入（数据信息 / 需求解析 / 步骤分解），只产出代码
+CODER_GENERATE_SYSTEM_ZH = """你是专业的 Python 程序员。用户消息固定包含三部分：（一）工作区数据文件的具体信息；（二）Planner 的需求解析；（三）Planner 的步骤分解（粗粒度）。请根据这三部分编写**一个**可执行的 Python 文件，不要复述说明、不要写长篇解释；除必要注释外输出即为可运行代码。
 """
-CODER_GENERATE_SYSTEM_EN = """You are a professional Python programmer. Generate standardized Python code according to task requirements, strictly following these rules:
-1. The code must contain exactly three parts in order (in a single code block):
-   - Part 1: Only necessary import statements (no extra libraries);
-   - Part 2: A complete function with a clear name (e.g. task_xxx), strictly using the specified input/output variable names:
-     - Input variable: {input_var_name} (description: {input_var_desc})
-     - Output variable: {output_var_name} (description: {output_var_desc})
-     The function must have a clear docstring (purpose, parameters, return value); parameters and return must match the specified variable names;
-   - Part 3: Demo test code must read real data using file paths and formats from the workspace file list below, call the function, and print {output_var_name}; do not fabricate data or paths;
-2. Use only real workspace file paths and formats (relative paths; cwd at runtime is workspace root); do not invent filenames;
-3. Code must be runnable, syntax-error-free, and follow Python best practices;
-4. Do not add any extra content (markdown, comments, delimiters, etc.); return only pure Python code;
-5. Ensure correct indentation and formatting.
+CODER_GENERATE_SYSTEM_EN = """You are a professional Python programmer. The user message has three fixed parts: (1) workspace data file details; (2) Planner requirement analysis; (3) Planner phase-level steps. Write **one** runnable Python file from these—no long prose; output should be code (minimal comments OK).
 """
 
 # Coder - 代码修正（correct）专用 system
-CODER_CORRECT_SYSTEM_ZH = """你是专业的Python调试工程师，需要修正以下代码的错误：
-1. 现有代码（包含import、函数、测试三部分，整合在一个代码块中）：
+CODER_CORRECT_SYSTEM_ZH = """你是专业的 Python 调试工程师。下面是一段在工作区中使用的 Python 代码及其执行报错，请在尽量保留原有输入输出变量名与核心意图的前提下修正问题，使脚本能再次顺利运行、缩进正确。请直接给出修正后的完整代码，不必长篇解释问题原因。
+现有代码：
 {existing_code}
-2. 执行错误信息：
+执行错误信息：
 {error_msg}
-3. 修正规则：
-   - 仅修正错误，不改变原有的输入/输出变量名和核心逻辑；
-   - 保持代码结构：仍包含import、函数、测试三部分（整合在一个代码块中）；
-   - 修正后代码必须可运行，缩进正确；
-   - 仅返回修正后的完整纯Python代码，不要其他解释。
 """
-CODER_CORRECT_SYSTEM_EN = """You are a professional Python debugging engineer. Fix the following code errors:
-1. Current code (import, function, and test in one block):
+CODER_CORRECT_SYSTEM_EN = """You are a professional Python debugging engineer. Below is workspace Python code and its runtime error. Fix the issues while preserving the original input/output variable names and core intent as much as possible, so the script runs again with correct indentation. Return the full corrected code directly without a long explanation of the cause.
+Current code:
 {existing_code}
-2. Execution error:
+Execution error:
 {error_msg}
-3. Correction rules:
-   - Fix only the errors; do not change input/output variable names or core logic;
-   - Keep structure: import, function, and test in one block;
-   - Corrected code must be runnable with correct indentation;
-   - Return only the complete corrected pure Python code, no other explanation.
 """
 
-# Coder - 用户提示（generate / correct）
-USER_PROMPT_CODER_GENERATE_ZH = "任务要求：{task_desc}"
-USER_PROMPT_CODER_GENERATE_EN = "Task requirement: {task_desc}"
+# Coder - 用户提示（generate / correct）：三段结构，与 workspace_coder 拼装一致
+USER_PROMPT_CODER_GENERATE_ZH = """（一）工作区数据文件的具体信息
+{data_file_info}
+
+（二）Planner 的需求解析
+{requirement_analysis}
+
+（三）Planner 的步骤分解（大致阶段）
+{steps_outline}
+
+请根据以上三部分编写单个 Python 脚本（同一文件内完成读入、处理与输出/演示）。只输出代码。"""
+USER_PROMPT_CODER_GENERATE_EN = """(1) Workspace data file details
+{data_file_info}
+
+(2) Planner requirement analysis
+{requirement_analysis}
+
+(3) Planner step outline (phases)
+{steps_outline}
+
+Write one Python script from the three parts above. Output code only."""
 USER_PROMPT_CODER_CORRECT_ZH = "请修正上述代码错误"
 USER_PROMPT_CODER_CORRECT_EN = "Please fix the above code errors."
 
@@ -139,187 +146,98 @@ SYSTEM_PROMPT_REPORTER = {
 
 # -------------------------- 用户提示词--------------------------
 
-# planner - req_analysis
-USER_PROMPT_PLANNER_REQ_ANALYSIS_ZH = """请将用户需求结构化解析。
-待解析需求：{input_data}
-工作区中可用的数据文件信息（包含真实相对路径与列信息）：{file_info}
-重要约束：当你在后续内容中提及具体数据文件时，必须严格使用上述文件信息中的相对路径（例如 input/20260316_xxx.xlsx），禁止使用用户原始描述中的文件名或自行编造文件路径。
-仅返回JSON（无额外文字），需包含以下必选字段，未知信息留空：
-{{
-  "task_type"："任务类型（如数据清洗、文本摘要、图表生成）"
-  "goal"："核心目标（清晰描述期望结果）"
-  "input_data"："输入描述（数据文件的内容与格式）"
-  "output_requirement"："输出要求（格式/精度/样式）"
-  "constraints"："约束（时间/资源限制）"
-}}
+# planner - analyze_requirement（第一步：仅需求解析）
+USER_PROMPT_PLANNER_ANALYZE_ZH = """请针对下列用户输入与工作区信息，用自然、通顺的中文写**需求解析**（本步**不要**写实现步骤或代码）。
+
+【用户原始需求】
+{input_data}
+
+【工作区数据文件信息】（含相对路径、列、dtypes、样本与 pandas.info 摘要）
+{file_info}
+
+请说明：任务类型或性质；用户要达成的核心目标；输入数据来自哪些文件、字段含义与格式；期望输出是什么（形态、粒度）；约束与未知项（写「未知」）。凡涉及路径与列名，仅使用上文工作区信息中的内容。
 """
-USER_PROMPT_PLANNER_REQ_ANALYSIS_EN = """Please conduct a structured analysis of user requirements.
-Requirements to be analyzed: {input_data}
-Workspace data file information (real relative paths and schema): {file_info}
-Important constraint: whenever you refer to concrete data files, you must strictly use the relative paths from the file information above (e.g. input/20260316_xxx.xlsx). Do NOT use filenames only mentioned in the user's description and NEVER invent new paths.
-Return only JSON (no extra text). It must include the following mandatory fields; leave unknown information blank:
-{{
-  "task_type": "Task type (e.g., data cleaning, text summarization, chart generation)",
-  "goal": "Core objective (describe the expected result clearly)",
-  "input_data": "Input description (data file content and format)",
-  "output_requirement": "Output requirement (format/accuracy/style)",
-  "constraints": "Constraints (time/resource limitations)"
-}}
+USER_PROMPT_PLANNER_ANALYZE_EN = """Write **requirement analysis only** in clear English (no implementation steps or code in this step).
+
+【User request】
+{input_data}
+
+【Workspace file information】 (relative paths, columns, dtypes, samples, pandas.info summary)
+{file_info}
+
+Cover: task type; objective; inputs (which files, field meanings, format); expected outputs; constraints and unknowns. Use only paths and columns from the workspace section above.
 """
 
-# planner - assign_tasks（仅基于核心需求，无经验/知识）
-USER_PROMPT_PLANNER_ASSIGN_TASKS_ZH = """  请基于以下核心需求，将当前需求拆解为≤10个结构化子任务，需满足“功能独立、依赖清晰、数据闭环”三大要求：
- - 已知信息（需严格基于以下内容拆解，不新增未提及前提）：
-    1. 核心需求：{structured_req}（需完全覆盖需求要点，不遗漏关键动作）
- - 输出核心约束：
-    1. 结构要求：输出必须是**JSON数组**，子任务需构成“线性序列”或“有向无环图（DAG）”，无循环依赖；
-    2. 字段规范（无缺失、无冗余、类型严格匹配，表述精准）：
-      {{
-        "task_id": "整数（1开始递增，唯一不重复）",
-        "task_name": "字符串（≤10字，简洁明确，体现核心动作，如“数据清洗”“规则匹配”）",
-        "description": "字符串（≤50字，说明“具体执行方式”，不笼统表述）",
-        "dependencies": "整数数组，仅列出直接前置任务ID（无依赖填[]，不填间接依赖）",
-        "worker_type": "字符串（仅可选：数据/文本/逻辑/图表，严格对应任务核心处理类型）",
-        "input": "字符串数组，每个元素描述单个输入项的“内容+格式”，需完全来源于依赖任务的output数组元素，标注对应上游任务与输出项（无冗余）；如涉及数据文件，必须使用工作区真实相对路径（例如 input/20260316_xxx.xlsx），不得使用用户原始文件名或臆造路径",
-        "output": "字符串数组，每个元素描述单个输出项的“内容+格式”，需为下游任务input数组提供可直接引用的数据源（无模糊表述）；如输出为文件，同样需要给出计划中的相对路径约定"
-      }}
-    3. 数据流转铁律（强制遵循）：
-      - 下游任务的input数组元素必须是其直接依赖任务output数组元素的“精准子集”，需明确关联上游任务ID与具体输出项（如“任务1的output[0]：去重清洗后CSV数据”）；
-      - 禁止引用未在upstream任务output数组中定义的内容，禁止input/output数组元素与依赖关系不匹配；
-    4. 子任务质量要求：
-      - 单个任务仅完成“单一核心动作”（如“采集”“匹配”“运算”），不叠加多重功能，避免功能重叠；
-      - 任务拆解粒度适中，既不拆分过细（如将“采集+清洗”拆为2个任务，而非1个），也不过于笼统（如不将“数据处理+可视化”合并为1个任务）；
-    5. 格式要求：仅返回JSON数组，无任何额外文字（注释、说明、换行多余内容均需删除）。
- - 参考示例（需严格遵循示例的“字段精准度+数据依赖逻辑+数组格式”）：
- [
-  {{"task_id":1,"task_name":"数据采集清洗","description":"采集原始数据并去重清洗","worker_type":"数据","dependencies":[],"input":["原始数据源（CSV/Excel格式）"],"output":["去重清洗后数据（CSV格式）"]}},
-  {{"task_id":2,"task_name":"规则匹配定义","description":"提取数据对应的处理规则并结构化","worker_type":"文本","dependencies":[1],"input":["任务1的output[0]：去重清洗后数据（CSV格式）"],"output":["结构化处理规则（JSON格式）"]}},
-  {{"task_id":3,"task_name":"逻辑运算执行","description":"按JSON规则对CSV数据执行条件判断与数值计算","worker_type":"逻辑","dependencies":[1,2],"input":["任务1的output[0]：去重清洗后数据（CSV格式）","任务2的output[0]：结构化处理规则（JSON格式）"],"output":["运算结果数据集（Excel格式）","运算日志（TXT格式）"]}},
-  {{"task_id":4,"task_name":"结果图表生成","description":"根据可视化规范生成趋势图表","worker_type":"图表","dependencies":[3],"input":["任务3的output[0]：运算结果数据集（Excel格式）"],"output":["趋势可视化图表（PNG格式）","图表元数据（JSON格式）"]}}
- ]
+# planner - decompose_steps（第二步：在需求解析基础上做步骤分解，粗粒度）
+USER_PROMPT_PLANNER_DECOMPOSE_ZH = """下列「需求解析」已由上一步完成。请在其基础上，用中文写出**步骤分解**（顺序阶段即可，不要细化到函数/变量/逐行代码）。
+
+【用户原始需求】（供对照）
+{input_data}
+
+【工作区数据文件信息】（供对照）
+{file_info}
+
+【需求解析】
+{requirement_analysis}
+
+请输出若干阶段（如：数据读入与检查 → … → 结果输出），每阶段一两句话说明要达成什么；不要写伪代码或具体库调用清单。
 """
-USER_PROMPT_PLANNER_ASSIGN_TASKS_EN = """ Please decompose the current requirement into ≤10 structured subtasks based on the following known information, meeting three core requirements: independent functions, clear dependencies, and closed-loop data flow. Strictly follow the rule: "downstream input = subset of upstream output".
- - Known Information (decompose strictly based on the following, no unmentioned premises added):
-   1. Core Requirement: {structured_req} (fully cover key points, no missing critical actions)
- - Core Output Constraints:
-   1. Structural Requirement: Output must be a **JSON array**. Subtasks shall form a "linear sequence" or "directed acyclic graph (DAG)" with no circular dependencies.
-   2. Field Specifications (no missing/redundant fields, strict type matching, precise expression):
-     {{
-       "task_id": "Integer (starting from 1, sequential and unique)",
-       "task_name": "String (≤10 characters, concise and clear, reflecting core action, e.g., 'Data Cleaning' 'Rule Matching')",
-       "description": "String (≤50 characters, explain 'specific execution method', no vague expressions)",
-       "dependencies": "Integer array, only list direct predecessor task IDs (fill in [] if no dependencies, no indirect dependencies)",
-       "worker_type": "String (only optional: Data/Text/Logic/Chart, strictly corresponding to the core processing type of the task)",
-       "input": "String array, each element describes the 'content + format' of a single input item, which must be fully derived from the output array elements of dependent tasks. Label corresponding upstream tasks and output items (no redundancy)",
-       "output": "String array, each element describes the 'content + format' of a single output item, which must provide directly referenceable data sources for downstream tasks' input arrays (no vague expressions)"
-     }}
-   3. Iron Rule of Data Flow (mandatory):
-     - The input array elements of a downstream task must be an "exact subset" of the output array elements of its direct dependent tasks. Clearly associate the upstream task ID and specific output item (e.g., "Task 1's output[0]: Deduplicated & cleaned CSV data");
-     - Do not reference content not defined in the output array of upstream tasks. Avoid mismatches between input/output array elements and dependencies.
-   4. Subtask Quality Requirements:
-     - A single task only completes one "core action" (e.g., "collection", "matching", "calculation"). Do not superimpose multiple functions or allow functional overlap;
-     - Decompose tasks with moderate granularity: neither too fine-grained (e.g., split "collection + cleaning" into 2 tasks instead of 1) nor too vague (e.g., do not merge "data processing + visualization" into 1 task).
-   5. Format Requirement: Only return the JSON array with no additional text (delete comments, explanations, line breaks, or other redundant content).
- - Reference Example (strictly follow the "field precision + data dependency logic + array format" of the example):
- [
-  {{"task_id":1,"task_name":"Data Collection & Cleaning","description":"Collect raw data and deduplicate/clean it","worker_type":"Data","dependencies":[],"input":["Raw data source (CSV/Excel format)"],"output":["Deduplicated & cleaned data (CSV format)"]}},
-  {{"task_id":2,"task_name":"Rule Matching & Definition","description":"Extract and structure data processing rules","worker_type":"Text","dependencies":[1],"input":["Task 1's output[0]: Deduplicated & cleaned data (CSV format)"],"output":["Structured processing rules (JSON format)"]}},
-  {{"task_id":3,"task_name":"Logical Operation Execution","description":"Perform conditional judgment and numerical calculation on CSV data per JSON rules","worker_type":"Logic","dependencies":[1,2],"input":["Task 1's output[0]: Deduplicated & cleaned data (CSV format)","Task 2's output[0]: Structured processing rules (JSON format)"],"output":["Calculation result dataset (Excel format)","Calculation log (TXT format)"]}},
-  {{"task_id":4,"task_name":"Result Visualization","description":"Generate trend charts according to visualization standards","worker_type":"Chart","dependencies":[3],"input":["Task 3's output[0]: Calculation result dataset (Excel format)"],"output":["Trend visualization chart (PNG format)","Chart metadata (JSON format)"]}}
- ]"""
+USER_PROMPT_PLANNER_DECOMPOSE_EN = """The following **requirement analysis** is already done. On top of it, write a **phase-level step outline** in English (ordered stages only—no functions, variables, or line-by-line code).
+
+【Original user request】
+{input_data}
+
+【Workspace file information】
+{file_info}
+
+【Requirement analysis】
+{requirement_analysis}
+
+Output sequential phases (e.g. load/check → … → output); one or two sentences per phase on intent—no pseudocode or explicit library enumeration.
+"""
 
 # planner - re_plan
-USER_PROMPT_PLANNER_RE_PLAN_ZH = """请根据当前执行结果与反馈，对原始需求进行重新规划。
-- 已知信息：
+USER_PROMPT_PLANNER_RE_PLAN_ZH = """请根据当前执行结果与反馈，对原始需求做一版重新规划（仍按**单文件 Python**实现来想），用自然、连贯的中文写清即可。
+已知信息：
 1. 原始需求：{original_requirement}
 2. 原来的计划：{original_plan}
 3. 修改意见：{modification_feedback}
-4. 当前执行情况/结果/出错：{execution_result}
-- 输出要求：
-1. 重新规划内容需包含**调整后的子任务有向无环图**，明确每个步骤的目标与操作要点。输出格式必须是一个**JSON数组**，每个元素为子任务对象，子任务需构成线性序列/有向无环图（DAG）。
-2. 需说明调整的原因（关联执行结果中的问题及原计划的适配性），保持逻辑连贯性
-3. 仅返回重新规划的内容，无额外冗余文字
+4. 当前执行情况、结果或报错：{execution_result}
+
+请写出调整后的需求理解要点与实现步骤（面向一个脚本），并说明为何这样改、与执行结果/原计划的关系。避免堆砌无关套话。
 """
-USER_PROMPT_PLANNER_RE_PLAN_EN = """Please re-plan the original requirement based on the current execution results and feedback.
-- Known Information:
-1. Original Requirement: {original_requirement}
-2. Original Plan: {original_plan}
-3. Modification Feedback: {modification_feedback}
-4. Current execution status/results/errors: {execution_result}
-- Output Requirements:
-1. The re-planning content must include an **adjusted sequence of steps**, specifying the goal and operation points of each step
-2. Explain the reasons for adjustment (related to issues in execution results and adaptability of the original plan) to maintain logical consistency
-3. Only return the re-planning content without extra redundant text
+USER_PROMPT_PLANNER_RE_PLAN_EN = """Re-plan the original requirement from the execution results and feedback. Write in clear, connected prose.
+Known context:
+1. Original requirement: {original_requirement}
+2. Previous plan: {original_plan}
+3. Modification feedback: {modification_feedback}
+4. Current execution status, results, or errors: {execution_result}
+
+Give revised understanding and implementation steps (one script), and why the change addresses execution issues and the old plan. Avoid filler.
 """
 
 # worker - req_analysis（与 planner 略不同，无 file_info）
-USER_PROMPT_WORKER_REQ_ANALYSIS_ZH = """请将用户需求结构化解析。
+USER_PROMPT_WORKER_REQ_ANALYSIS_ZH = """请阅读用户需求，用自然、通顺的中文写成完整说明，便于后续执行与调度。
 待解析需求：{input_data}
-仅返回JSON（无额外文字），需包含以下必选字段，未知信息留空：
-{{
-  "task_type"："任务类型（如数据清洗、文本摘要、图表生成）"
-  "goal"："核心目标（清晰描述期望结果）"
-  "input_data"："输入描述（数据来源/格式）"
-  "output_requirement"："输出要求（格式/精度/样式）"
-  "constraints"："约束（时间/资源限制）"
-}}
+请交代：任务类型或性质；用户想达成的核心目标；输入是什么、来自哪里、格式如何；期望输出长什么样；是否有时间、资源或其他约束。不清楚的如实说明，不要编造。
 """
-USER_PROMPT_WORKER_REQ_ANALYSIS_EN = """Please conduct a structured analysis of user requirements.
-Requirements to be analyzed: {input_data}
-Return only JSON (no extra text). It must include the following mandatory fields; leave unknown information blank:
-{{
-  "task_type": "Task type (e.g., data cleaning, text summarization, chart generation)",
-  "goal": "Core objective (describe the expected result clearly)",
-  "input_data": "Input description (data source/format)",
-  "output_requirement": "Output requirement (format/accuracy/style)",
-  "constraints": "Constraints (time/resource limitations)"
-}}
+USER_PROMPT_WORKER_REQ_ANALYSIS_EN = """Read the user's requirement and write a clear narrative for downstream execution and scheduling.
+Requirement to analyze: {input_data}
+Cover: the kind of task; the core objective; what the inputs are, where they come from, and their format; what outputs are expected; any time, resource, or other constraints. State unknowns honestly; do not fabricate.
 """
 
-# worker - assign_tasks（简化版，仅基于需求）
-USER_PROMPT_WORKER_ASSIGN_TASKS_ZH = """  请将当前需求分解为≤10个子任务。
-- 已知信息：
- 1. 需求：{structured_req}
-- 输出要求：
- 1. 输出格式必须是一个**JSON数组**，每个元素为子任务对象，子任务需构成线性序列/有向无环图（DAG）
- 2. 每个子任务对象包含以下字段（字段不缺失、无冗余，类型严格匹配）：
-{{
-   "task_id": "整数（1开始递增）",
-   "task_name": "字符串（≤10 字）",
-   "description": "字符串（≤50字，说明具体执行方式）",
-   "dependencies": "整数数组，进行当前任务需要的前置任务（无依赖填[]）",
-   "worker_type": "字符串，描述子任务的处理类型（数据/文本/逻辑/图表）"
-}}
- 3. 仅返回JSON数组，无任何额外文字。
-- 示例格式：
-[
-  {{"task_id":1,"task_name":"数据采集","description":"采集并清洗目标数据","worker_type":"数据","dependencies":[]}},
-  {{"task_id":2,"task_name":"规则匹配","description":"匹配数据处理规则并结构化","worker_type":"文本","dependencies":[]}},
-  {{"task_id":3,"task_name":"逻辑处理","description":"基于采集数据和匹配规则执行逻辑运算","worker_type":"逻辑","dependencies":[1,2]}},
-  {{"task_id":4,"task_name":"结果可视化","description":"将处理结果生成可视化图表","worker_type":"图表","dependencies":[3]}}
-]
+# worker - assign_tasks（与当前单文件流水线一致：仅保留文案供独立使用）
+USER_PROMPT_WORKER_ASSIGN_TASKS_ZH = """请根据下列需求，用自然、工整的中文说明如何在一个 Python 脚本中完成（不拆多文件）。
+
+需求：{structured_req}
+
+请写清：要读哪些数据、如何处理、输出什么；若涉及文件请使用工作区真实相对路径。
 """
-USER_PROMPT_WORKER_ASSIGN_TASKS_EN = """Please decompose the current requirement into ≤10 subtasks.
-- Known Information:
- 1. Requirement: {structured_req}
-- Output Requirements:
- 1. The output format must be a JSON array, where each element is a subtask object, and the subtasks shall form a linear sequence or directed acyclic graph (DAG).
- 2. Each subtask object shall contain the following fields (no missing or redundant fields, and strict type matching):
-{{
-   "task_id": "Integer (starting from 1 and increasing sequentially)",
-   "task_name": "String (≤ 10 characters)",
-   "description": "String (≤ 50 characters, describing specific execution method)",
-   "dependencies": "Integer array, pre tasks required for the current task (fill in [] if there are no dependencies)",
-   "worker_type": "String, describing the processing type of the subtask (Data/Text/Logic/Chart)"
-}}
- 3. Only return the JSON array without any additional text.
-- Example Format:
-[
-  {{"task_id":1,"task_name":"Data Collection","description":"Collect and clean target data","worker_type":"Data","dependencies":[]}},
-  {{"task_id":2,"task_name":"Rule Matching","description":"Match and structure data processing rules","worker_type":"Text","dependencies":[]}},
-  {{"task_id":3,"task_name":"Logical Processing","description":"Perform logical operations based on collected data and matching rules","worker_type":"Logic","dependencies":[1,2]}},
-  {{"task_id":4,"task_name":"Result Visualization","description":"Generate visual charts from processing results","worker_type":"Chart","dependencies":[3]}}
-]
+USER_PROMPT_WORKER_ASSIGN_TASKS_EN = """Explain how to complete the following in **one** Python script (no multi-file split).
+
+Requirement: {structured_req}
+
+Cover: what to read, how to process, what to output; use real workspace relative paths for files.
 """
 
 # worker - re_plan（与 planner 相同）
@@ -327,31 +245,33 @@ USER_PROMPT_WORKER_RE_PLAN_ZH = USER_PROMPT_PLANNER_RE_PLAN_ZH
 USER_PROMPT_WORKER_RE_PLAN_EN = USER_PROMPT_PLANNER_RE_PLAN_EN
 
 # -------------------------- Reporter 报告生成 --------------------------
-USER_PROMPT_REPORTER_ZH = """请根据以下规划与执行结果，生成一份简洁、结构清晰的数据分析报告。
+USER_PROMPT_REPORTER_ZH = """请根据以下规划与执行结果，写一份简洁可读的数据分析报告（中文），分段落组织即可。
 
-## 规划摘要
+规划摘要：
 {planner_summary}
 
-## 执行结果
-- 整体成功: {success}
+执行结果：
+- 整体是否成功: {success}
 - 执行日志:
 {execution_logs}
 {error_section}
 
-请用中文撰写报告，包含：1) 分析目标 2) 主要发现 3) 结论与建议。"""
+文中请交代本次分析要解决的问题或目标依据、执行过程中的主要发现与现象，并在结尾给出结论与可操作建议；若存在错误或异常，也请自然融入叙述。
+"""
 
-USER_PROMPT_REPORTER_EN = """Please generate a concise, well-structured data analysis report based on the following plan and execution results.
+USER_PROMPT_REPORTER_EN = """Write a concise, readable data analysis report in English based on the plan and execution below. Use paragraphs as you see fit.
 
-## Plan Summary
+Plan summary:
 {planner_summary}
 
-## Execution Results
+Execution:
 - Overall success: {success}
-- Execution logs:
+- Logs:
 {execution_logs}
 {error_section}
 
-Please write the report in English, including: 1) Analysis objectives 2) Key findings 3) Conclusions and recommendations."""
+Explain what the analysis set out to do, what stood out during execution, and finish with conclusions and actionable recommendations. Work in errors or anomalies naturally if present.
+"""
 
 # -------------------------- Coder 专用 system 索引（带占位符，需 format）--------------------------
 CODER_SYSTEM_PROMPTS = {
@@ -379,8 +299,8 @@ def get_coder_system_prompt(segment: str, lang: str = "zh", **params: Any) -> st
 # -------------------------- 用户提示词索引 --------------------------
 USER_PROMPTS = {
     "planner": {
-        "req_analysis": {"zh": USER_PROMPT_PLANNER_REQ_ANALYSIS_ZH, "en": USER_PROMPT_PLANNER_REQ_ANALYSIS_EN},
-        "assign_tasks": {"zh": USER_PROMPT_PLANNER_ASSIGN_TASKS_ZH, "en": USER_PROMPT_PLANNER_ASSIGN_TASKS_EN},
+        "analyze_requirement": {"zh": USER_PROMPT_PLANNER_ANALYZE_ZH, "en": USER_PROMPT_PLANNER_ANALYZE_EN},
+        "decompose_steps": {"zh": USER_PROMPT_PLANNER_DECOMPOSE_ZH, "en": USER_PROMPT_PLANNER_DECOMPOSE_EN},
         "re_plan": {"zh": USER_PROMPT_PLANNER_RE_PLAN_ZH, "en": USER_PROMPT_PLANNER_RE_PLAN_EN},
     },
     "coder": {
@@ -398,12 +318,20 @@ USER_PROMPTS = {
 }
 
 
+def get_planner_step_system_prompt(step: str, lang: str = "zh") -> str:
+    """
+    Planner 两步链路中各步专用 system：step 为 analyze | decompose。
+    """
+    by_step = PLANNER_STEP_SYSTEM_PROMPTS.get(step, {})
+    return by_step.get(lang) or by_step.get("zh") or ""
+
+
 def get_user_prompt(role: str, task: str, lang: str = "zh", **params: Any) -> str:
     """
     根据角色、任务与语言返回格式化后的用户提示词。
     缺失的占位符会替换为空字符串。
-    role: planner | worker
-    task: req_analysis | assign_tasks | re_plan
+    role: planner | worker | coder | reporter
+    task: analyze_requirement | decompose_steps | re_plan (planner); req_analysis | assign_tasks | re_plan (worker); generate | correct (coder); report (reporter)
     lang: zh | en
     """
     by_role = USER_PROMPTS.get(role.lower(), {})

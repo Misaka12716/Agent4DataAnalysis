@@ -20,11 +20,12 @@ SUPPORTED_MODELS: List[str] = [
     "qwen2.5:3b",
     "qweb3-coder:30b",
 ]  # 支持的模型列表
-DEFAULT_MODEL = "qwen2.5:7b"  # 默认使用的模型
+DEFAULT_MODEL = "qwen3:32b"  # 默认使用的模型（勿尾随空格，避免兼容 API 拒收）
 DEFAULT_CODER_MODEL = "qwen3-coder:30b"  # 默认使用的模型
 LANGUAGE = "zh"  # 使用的语言(zn/en)
 
-# 是否开启大模型全流程日志记录（默认关闭，避免无感知性能损耗）
+
+# 是否开启大模型全流程日志记录
 ENABLE_MODEL_LOG: bool = True
 
 # --------------------------

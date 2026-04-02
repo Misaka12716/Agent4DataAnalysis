@@ -85,45 +85,44 @@ async def streaming_task_generator(
                     if event.get("type") == "stage_result" and event.get("data"):
                         plan_data = event["data"]
 
-                if not plan_data or not plan_data.get("任务分配结果"):
+                if not plan_data:
                     yield _push(session_id, {
                         "type": "error",
-                        "message": "规划未产出任务分配结果",
+                        "message": "规划阶段未产出有效结果",
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     })
                     return
 
-                task_result = plan_data["任务分配结果"]
-                tasks = task_result.get("tasks") or []
-                execution_mode = task_result.get("execution_mode", "simple")
-                code_file_paths = task_result.get("code_file_paths") or ["main.py"]
-                planner_summary = json.dumps(
-                    {"execution_mode": execution_mode, "tasks": tasks},
-                    ensure_ascii=False,
-                )
+                requirement_analysis = (plan_data.get("需求解析") or "").strip()
+                steps_outline = (plan_data.get("步骤分解") or "").strip()
+                if not requirement_analysis or not steps_outline:
+                    yield _push(session_id, {
+                        "type": "error",
+                        "message": "规划结果缺少需求解析或步骤分解",
+                        "data": plan_data,
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    })
+                    return
+
+                execution_mode = "simple"
+                code_file_paths = ["main.py"]
+                planner_summary = (plan_data.get("规划全文") or "").strip()
+                if not planner_summary:
+                    planner_summary = json.dumps(
+                        {
+                            "需求解析": requirement_analysis,
+                            "步骤分解": steps_outline,
+                        },
+                        ensure_ascii=False,
+                    )
 
                 # 2. Coder：按任务生成代码并写入工作区
-                code_specs = []
-                for t in tasks:
-                    inp = t.get("input")
-                    out = t.get("output")
-                    code_specs.append({
-                        "task_desc": t.get("description", ""),
-                        "input_var_name": "input_data",
-                        "input_var_desc": (inp[0] if isinstance(inp, list) and inp else "输入数据"),
-                        "output_var_name": "output_result",
-                        "output_var_desc": (out[0] if isinstance(out, list) and out else "输出结果"),
-                        "relative_path": t.get("relative_path", "main.py"),
-                    })
-                if not code_specs and code_file_paths:
-                    code_specs = [{
-                        "task_desc": input_data,
-                        "input_var_name": "input_data",
-                        "input_var_desc": "输入",
-                        "output_var_name": "output_result",
-                        "output_var_desc": "输出",
-                        "relative_path": code_file_paths[0],
-                    }]
+                code_specs = [{
+                    "task_desc": planner_summary or input_data,
+                    "requirement_analysis": requirement_analysis,
+                    "steps_outline": steps_outline,
+                    "relative_path": code_file_paths[0],
+                }]
                 # 获取工作区文件列表与 Excel 结构，供 Coder 使用真实路径与格式
                 workspace_context = {}
                 workspace_root = resolve_workspace_root(session_id)
