@@ -228,7 +228,6 @@ def preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "original_shape": raw_df.shape,
         "fixed_shape": fixed_df.shape,
         "columns": fixed_df.columns.tolist(),
-        "dtypes": fixed_df.dtypes.astype(str).to_dict(),
         "is_large_table": n_rows > SAMPLING_THRESHOLD,
         "sampling_info": (
             f"抽样{len(sample_df)}/{n_rows}行"
@@ -324,7 +323,6 @@ def generate_report_node(state: Dict[str, Any]) -> Dict[str, Any]:
 - 是否为大表格：{"是" if basic_info['is_large_table'] else "否"}
 - 抽样信息：{basic_info['sampling_info']}
 - 表头修正详情：{header_fix_info}
-- 列名及数据类型：{basic_info['dtypes']}
 
 ## 统计分析信息
 1. 缺失值比例（按列）：{stats_info['missing_values']}
@@ -398,7 +396,6 @@ def read_workspace_excel_schema_and_sample(
             "relative/path.xlsx": {
                 "relative_path": "relative/path.xlsx",
                 "columns": [...],
-                "dtypes": {...},
                 "shape": (r,c),
                 "pandas_info": "..."
             },
@@ -425,7 +422,6 @@ def read_workspace_excel_schema_and_sample(
                 result["files"][rel_path] = {
                     "relative_path": rel_path,
                     "columns": [],
-                    "dtypes": {},
                     "shape": (0, 0),
                 }
                 continue
@@ -433,7 +429,6 @@ def read_workspace_excel_schema_and_sample(
             df.columns = [str(c) for c in df.iloc[0]]
             df = df.iloc[1:].reset_index(drop=True)
             cols = df.columns.tolist()
-            dtypes = df.dtypes.astype(str).to_dict()
             buf = io.StringIO()
             try:
                 df.info(buf=buf, memory_usage=False)
@@ -443,7 +438,6 @@ def read_workspace_excel_schema_and_sample(
             result["files"][rel_path] = {
                 "relative_path": rel_path,
                 "columns": cols,
-                "dtypes": dtypes,
                 "shape": df.shape,
                 "pandas_info": pandas_info,
             }

@@ -152,7 +152,7 @@ USER_PROMPT_PLANNER_ANALYZE_ZH = """请针对下列用户输入与工作区信�
 【用户原始需求】
 {input_data}
 
-【工作区数据文件信息】（含相对路径、列、dtypes、样本与 pandas.info 摘要）
+【工作区数据文件信息】（含相对路径、列、样本与 pandas.info 摘要）
 {file_info}
 
 请说明：任务类型或性质；用户要达成的核心目标；输入数据来自哪些文件、字段含义与格式；期望输出是什么（形态、粒度）；约束与未知项（写「未知」）。凡涉及路径与列名，仅使用上文工作区信息中的内容。
@@ -162,7 +162,7 @@ USER_PROMPT_PLANNER_ANALYZE_EN = """Write **requirement analysis only** in clear
 【User request】
 {input_data}
 
-【Workspace file information】 (relative paths, columns, dtypes, samples, pandas.info summary)
+【Workspace file information】 (relative paths, columns, samples, pandas.info summary)
 {file_info}
 
 Cover: task type; objective; inputs (which files, field meanings, format); expected outputs; constraints and unknowns. Use only paths and columns from the workspace section above.

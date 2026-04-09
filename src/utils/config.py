@@ -20,7 +20,7 @@ SUPPORTED_MODELS: List[str] = [
     "qwen2.5:3b",
     "qweb3-coder:30b",
 ]  # 支持的模型列表
-DEFAULT_MODEL = "qwen3:32b"  # 默认使用的模型（勿尾随空格，避免兼容 API 拒收）
+DEFAULT_MODEL = "qwen3:8b"  # 默认使用的模型（勿尾随空格，避免兼容 API 拒收）
 DEFAULT_CODER_MODEL = "qwen3-coder:30b"  # 默认使用的模型
 LANGUAGE = "zh"  # 使用的语言(zn/en)
 
