@@ -22,6 +22,12 @@ SUPPORTED_MODELS: List[str] = [
 ]  # 支持的模型列表
 DEFAULT_MODEL = "qwen3:8b"  # 默认使用的模型（勿尾随空格，避免兼容 API 拒收）
 DEFAULT_CODER_MODEL = "qwen3-coder:30b"  # 默认使用的模型
+# 顶层编排 Supervisor 路由模型（可与主模型相同）
+DEFAULT_ORCHESTRATOR_MODEL = os.getenv("DEFAULT_ORCHESTRATOR_MODEL", DEFAULT_MODEL)
+# 编排：Supervisor 调用次数上限、子阶段重试上限
+MAX_SUPERVISOR_INVOCATIONS = int(os.getenv("MAX_SUPERVISOR_INVOCATIONS", "24"))
+MAX_CODER_CORRECTIONS = int(os.getenv("MAX_CODER_CORRECTIONS", "5"))
+MAX_PLANNER_RETRIES = int(os.getenv("MAX_PLANNER_RETRIES", "4"))
 LANGUAGE = "zh"  # 使用的语言(zn/en)
 
 
