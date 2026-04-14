@@ -11,7 +11,7 @@ from langchain_core.output_parsers import StrOutputParser
 
 from utils.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_CODER_MODEL
 from configs.prompts import get_coder_system_prompt, get_user_prompt
-from utils.workspace_file_ops import create_python_file
+from utils.workspace_file_ops import create_python_file, read_file
 from utils.model_logger import log_model_event
 
 
@@ -113,6 +113,79 @@ def _generate_code_for_task(
     )
 
     return clean_code_from_markdown(raw)
+
+
+def correct_and_write_code(
+    session_id: str,
+    relative_path: str,
+    error_msg: str,
+    lang: str = "zh",
+    workspace_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    读取工作区内已有 Python 文件，根据执行错误信息修正后写回。
+    :return: {"relative_path", "success", "error": str|None}
+    """
+    rel_path = relative_path or "main.py"
+    if not rel_path.endswith(".py"):
+        rel_path = rel_path.rstrip("/") + ".py"
+    existing = read_file(session_id, rel_path)
+    if existing is None:
+        return {
+            "relative_path": rel_path,
+            "success": False,
+            "error": "无法读取工作区代码文件或文件不存在",
+        }
+    err = (error_msg or "").strip() or ("（无详细错误）" if lang == "zh" else "(no error detail)")
+    system_prompt = get_coder_system_prompt(
+        "correct",
+        lang=lang,
+        existing_code=existing,
+        error_msg=err,
+    )
+    user_body = get_user_prompt("coder", "correct", lang=lang)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        ("user", "{user_body}"),
+    ])
+    llm = ChatOpenAI(
+        model=DEFAULT_CODER_MODEL,
+        temperature=0.1,
+        api_key=API_KEY,
+        base_url=OPENAI_COMPATIBLE_API_BASE,
+    )
+    chain = prompt | llm | StrOutputParser()
+    payload = {"user_body": user_body}
+    log_model_event(
+        dialogue_id=session_id,
+        stage="coder_correct_input",
+        content=user_body + "\n\n" + err[:8000],
+    )
+    try:
+        raw = chain.invoke(payload)
+    except Exception as e:
+        log_model_event(
+            dialogue_id=session_id,
+            stage="coder_correct_output",
+            content=f"invoke_error: {e}",
+        )
+        return {
+            "relative_path": rel_path,
+            "success": False,
+            "error": str(e),
+        }
+    log_model_event(
+        dialogue_id=session_id,
+        stage="coder_correct_output",
+        content=raw,
+    )
+    code = clean_code_from_markdown(raw)
+    ok = create_python_file(session_id, rel_path, code, overwrite=True)
+    return {
+        "relative_path": rel_path,
+        "success": ok,
+        "error": None if ok else "写入工作区失败",
+    }
 
 
 def generate_and_write_code(
