@@ -4,7 +4,7 @@
 import pymysql  # pyright: ignore[reportMissingModuleSource]
 from pymysql.cursors import DictCursor  # pyright: ignore[reportMissingModuleSource]
 from typing import List, Dict, Optional, Tuple
-from utils.config import (
+from configs.config import (
     MYSQL_HOST,
     MYSQL_USER,
     MYSQL_PASSWORD,

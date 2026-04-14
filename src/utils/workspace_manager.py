@@ -6,7 +6,7 @@ import uuid
 from typing import Optional
 
 # 工作区根目录（与 config 中 TEMP 或专用目录对齐）
-from utils.config import TEMP_FOLDER
+from configs.config import TEMP_FOLDER
 
 WORKSPACES_ROOT = os.path.join(TEMP_FOLDER, "workspaces")
 

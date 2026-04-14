@@ -12,7 +12,7 @@ from langchain_core.prompts.chat import (
     HumanMessagePromptTemplate,
 )
 from typing import Dict, Any, List, Optional, Tuple, TypedDict
-from utils.config import (
+from configs.config import (
     OPENAI_COMPATIBLE_API_BASE,
     API_KEY,
     DEFAULT_MODEL,

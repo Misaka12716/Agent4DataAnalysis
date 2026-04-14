@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from typing import Any
 
-from utils.config import TEMP_FOLDER, ENABLE_MODEL_LOG
+from configs.config import TEMP_FOLDER, ENABLE_MODEL_LOG
 
 
 LOG_FOLDER = os.path.join(TEMP_FOLDER, "logs")

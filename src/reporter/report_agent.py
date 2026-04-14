@@ -4,7 +4,7 @@
 from typing import AsyncGenerator, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from utils.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
+from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
 from configs.prompts import get_system_prompt, get_user_prompt
 from utils.model_logger import log_model_event
 

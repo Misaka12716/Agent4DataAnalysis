@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import AsyncGenerator
 
 from db.session_store import SessionStore
-from utils.config import LANGUAGE
+from configs.config import LANGUAGE
 
 
 def _push_to_session(session_id: str, payload: dict) -> str:

@@ -13,14 +13,10 @@ DOWNLOAD_FOLDER = os.path.join(TEMP_FOLDER, "downloads/")  # 下载文件存储�
 # 模型相关配置
 # --------------------------
 SUPPORTED_MODELS: List[str] = [
-    "qwen3:32b",
-    "qwen3:8b",
-    "qwen3:4b",
-    "qwen2.5:7b",
-    "qwen2.5:3b",
+    "qwen3.5:9b",
     "qweb3-coder:30b",
 ]  # 支持的模型列表
-DEFAULT_MODEL = "qwen3:8b"  # 默认使用的模型（勿尾随空格，避免兼容 API 拒收）
+DEFAULT_MODEL = "qwen3.5:9b"  # 默认使用的模型（勿尾随空格，避免兼容 API 拒收）
 DEFAULT_CODER_MODEL = "qwen3-coder:30b"  # 默认使用的模型
 # 顶层编排 Supervisor 路由模型（可与主模型相同）
 DEFAULT_ORCHESTRATOR_MODEL = os.getenv("DEFAULT_ORCHESTRATOR_MODEL", DEFAULT_MODEL)

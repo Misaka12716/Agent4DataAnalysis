@@ -22,7 +22,7 @@ from planner.agent_planner import AgentPlanner
 from planner.dataframe_reader import read_workspace_excel_schema_and_sample
 from reporter.report_agent import stream_report
 from configs.prompts import append_orchestrator_feedback, get_system_prompt
-from utils.config import (
+from configs.config import (
     API_KEY,
     DEFAULT_ORCHESTRATOR_MODEL,
     MAX_CODER_CORRECTIONS,

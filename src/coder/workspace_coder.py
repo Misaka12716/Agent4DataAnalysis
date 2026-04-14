@@ -9,7 +9,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from utils.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_CODER_MODEL
+from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_CODER_MODEL
 from configs.prompts import get_coder_system_prompt, get_user_prompt
 from utils.workspace_file_ops import create_python_file, read_file
 from utils.model_logger import log_model_event

@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
-from utils.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
+from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
 from utils.model_logger import log_model_event
 
 
