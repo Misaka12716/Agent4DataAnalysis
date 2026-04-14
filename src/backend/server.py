@@ -2,7 +2,11 @@ import os
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from backend.api_models import StreamingTaskRequest
+from backend.api_models import StreamingTaskRequest, SendSmsCodeRequest, LoginWithSmsRequest
+from backend.auth_service import (
+    build_send_sms_code_response,
+    build_login_with_sms_response,
+)
 from backend.route_services import (
     build_health_response,
     handle_session_upload_excel,
@@ -56,6 +60,16 @@ async def session_snapshot(session_id: str):
 @app.post("/run-analysis")
 async def run_analysis(body: StreamingTaskRequest):
     return build_run_analysis_response(body)
+
+
+@app.post("/auth/send-sms-code")
+async def send_sms_code(body: SendSmsCodeRequest):
+    return build_send_sms_code_response(body.phone.strip())
+
+
+@app.post("/auth/login-with-sms")
+async def login_with_sms(body: LoginWithSmsRequest):
+    return build_login_with_sms_response(body.phone.strip())
 
 
 # -------------------------- 启动服务器 --------------------------

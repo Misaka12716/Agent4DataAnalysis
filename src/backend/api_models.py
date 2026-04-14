@@ -15,3 +15,11 @@ class StreamingTaskRequest(BaseModel):
 
     session_id: str
     input_data: str
+
+
+class SendSmsCodeRequest(BaseModel):
+    phone: str
+
+
+class LoginWithSmsRequest(BaseModel):
+    phone: str

@@ -26,6 +26,8 @@
 | `/session/upload-excel` | `POST` | 上传 Excel/CSV 到会话工作区 |
 | `/session/snapshot` | `GET` | 获取会话内容快照（完整累计内容 + 当前版本） |
 | `/run-analysis` | `POST` | 发起流式分析任务（SSE） |
+| `/auth/send-sms-code` | `POST` | 发送短信验证码（当前会将验证码直接回传给前端） |
+| `/auth/login-with-sms` | `POST` | 登录/注册一体：手机号存在直接登录，不存在自动注册并登录 |
 
 ---
 
@@ -188,6 +190,94 @@ data: {"type":"report_chunk","content":"第一部分结论..."}
 
 ---
 
+## 3.5 发送短信验证码
+
+- 路径：`POST /auth/send-sms-code`
+- 处理函数：`build_send_sms_code_response(phone)`（`src/backend/auth_service.py`）
+- Content-Type：`application/json`
+
+请求体（JSON）：
+
+```json
+{
+  "phone": "13800138000"
+}
+```
+
+成功返回（`200`）示例：
+
+```json
+{
+  "code": 0,
+  "msg": "SMS code sent successfully",
+  "data": {
+    "phone": "13800138000",
+    "verification_code": "123456",
+    "expires_in": 120
+  }
+}
+```
+
+常见错误：
+
+- `400`：手机号为空或格式非法（当前按中国大陆手机号 `^1\\d{10}$` 校验）
+
+实现逻辑：
+
+1. 校验手机号格式。
+2. 生成 6 位验证码。
+3. 将验证码与过期时间缓存在服务内存中（`120s`）。
+4. 返回验证码给前端（用于前端自行比对）。
+
+---
+
+## 3.6 短信登录（登录/注册一体）
+
+- 路径：`POST /auth/login-with-sms`
+- 处理函数：`build_login_with_sms_response(phone)`（`src/backend/auth_service.py`）
+- Content-Type：`application/json`
+
+请求体（JSON）：
+
+```json
+{
+  "phone": "13800138000"
+}
+```
+
+成功返回（`200`）示例：
+
+```json
+{
+  "code": 0,
+  "msg": "login success",
+  "data": {
+    "user_id": 12,
+    "username": "user_8000_1713072000",
+    "phone": "13800138000"
+  }
+}
+```
+
+常见错误：
+
+- `400`：手机号为空或格式非法
+- `403`：用户状态为禁用（兼容 `is_blocked=true` 或 `status in [blocked, disabled, inactive]`）
+- `500`：数据库查询/写入失败
+
+实现逻辑（当前版本）：
+
+1. 校验手机号格式。
+2. 查询 `users` 表：
+   - 查到：直接按登录成功返回；
+   - 查不到：自动创建用户后按登录成功返回。
+3. 新建用户时自动生成：
+   - `username`：`user_<手机号后4位>_<时间戳>`
+   - `password_hash`：后端生成占位哈希（短信登录场景不走密码校验）。
+4. 返回用户基础信息（`user_id`、`username`、`phone`）。
+
+---
+
 ## 4. 数据存储与接口关系
 
 - `session_user`：
@@ -199,6 +289,9 @@ data: {"type":"report_chunk","content":"第一部分结论..."}
   - `content` 存放“完整累计内容”文本
 - `/session/snapshot`：
   - 读取 `session_content` 最新版本并返回
+- `users`：
+  - 由 `/auth/login-with-sms` 在首次手机号登录时自动写入
+  - 已存在手机号走直接登录，不重复创建
 
 ---
 
@@ -236,6 +329,26 @@ curl -N -X POST "http://localhost:52716/run-analysis" \
   }'
 ```
 
+## 5.5 发送短信验证码
+
+```bash
+curl -X POST "http://localhost:52716/auth/send-sms-code" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone": "13800138000"
+  }'
+```
+
+## 5.6 短信登录（自动注册）
+
+```bash
+curl -X POST "http://localhost:52716/auth/login-with-sms" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone": "13800138000"
+  }'
+```
+
 ---
 
 ## 6. 说明与注意事项
@@ -244,3 +357,4 @@ curl -N -X POST "http://localhost:52716/run-analysis" \
 - 上传接口大小限制为 `2048MB`，请同时确认反向代理（如 Nginx）配置一致。
 - SSE 是持续连接，前端需按流式协议处理 `data:` 行。
 - 会话内容按“完整累计文本”落库，体量较大时可考虑后续改为增量片段存储策略。
+- 当前短信验证码接口会把验证码直接返回给前端，适合联调/内网场景；生产环境建议改为真实短信通道并在后端校验验证码。
