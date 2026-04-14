@@ -255,5 +255,5 @@ streamlit run frontend/frontend.py
 ## 相关文档
 
 - 启动说明：`docs/StartInstruction.md`
-- Planner 说明：`docs/Planner.md`
-- Neo4j 指南（可选）：`docs/Neo4j.md`
+- 后端接口说明：`docs/BackendAPI.md`
+- MySQL 说明：`docs/MySQL.md`

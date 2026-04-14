@@ -144,6 +144,52 @@ SYSTEM_PROMPT_REPORTER = {
     "en": SYSTEM_PROMPT_REPORTER_EN,
 }
 
+# -------------------------- Orchestrator：Supervisor（流水线路由） --------------------------
+SYSTEM_PROMPT_SUPERVISOR_ZH = """你是数据分析流水线的编排 Supervisor。根据「状态摘要」与可选错误摘录，选择下一步子阶段。
+规则要点：
+- 仅输出结构化字段；next_stage 必须是 planner、coder、worker、reporter、finish 之一。
+- 不要输出思考过程或推理标签；不要用 Markdown 代码块包裹 JSON；字符串内换行请写成 \\n，并避免未转义的双引号。
+- 若无有效规划（plan_ok=false），必须选 planner。
+- 若规划有效但尚未有成功写入代码（code_ok=false），应选 coder。
+- 若代码已写入但未执行 worker，应选 worker（不要跳步到 reporter）。
+- 若 worker 失败，应优先选 coder 进行修正，并在 feedback_for_next 中写明错误与期望。
+- 若 worker 成功且尚未报告，应选 reporter。
+- 若 reporter_done=true，只能选 finish。
+- feedback_for_next 会在进入 planner 时附加到用户需求的末尾；进入 coder 时可作为额外上下文（当前实现主要依赖 worker 失败时的修正提示）。"""
+
+SYSTEM_PROMPT_SUPERVISOR_EN = """You are the orchestration Supervisor for a data-analysis pipeline. Using the state summary and optional error excerpts, choose the next sub-stage.
+Rules:
+- Output only structured fields; next_stage must be one of: planner, coder, worker, reporter, finish.
+- Do not output chain-of-thought or reasoning tags; do not wrap JSON in Markdown code fences; use \\n inside strings instead of raw newlines, and avoid unescaped double quotes.
+- If there is no valid plan (plan_ok=false), you must choose planner.
+- If the plan is valid but no code has been successfully written yet (code_ok=false), choose coder.
+- If code is written but worker has not run, choose worker (do not skip straight to reporter).
+- If worker fails, prefer coder for fixes, and put errors and expectations clearly in feedback_for_next.
+- If worker succeeded and there is no report yet, choose reporter.
+- If reporter_done=true, you may only choose finish.
+- feedback_for_next is appended to the user requirement when entering planner, and can supply extra context when entering coder (today this mainly matters for correction hints after worker failures)."""
+
+SYSTEM_PROMPT_SUPERVISOR = {
+    "zh": SYSTEM_PROMPT_SUPERVISOR_ZH,
+    "en": SYSTEM_PROMPT_SUPERVISOR_EN,
+}
+
+ORCHESTRATOR_FEEDBACK_HEADER_ZH = "【编排者反馈】"
+ORCHESTRATOR_FEEDBACK_HEADER_EN = "[Orchestrator feedback]"
+
+
+def append_orchestrator_feedback(base_text: str, feedback: str, lang: str = "zh") -> str:
+    """
+    将编排者反馈附加到基础文案末尾（Planner 用户需求 / Coder task_desc 等）。
+    feedback 为空或仅空白时返回 base_text 原样（strip 后）。
+    """
+    base = (base_text or "").strip()
+    fb = (feedback or "").strip()
+    if not fb:
+        return base
+    header = ORCHESTRATOR_FEEDBACK_HEADER_ZH if lang == "zh" else ORCHESTRATOR_FEEDBACK_HEADER_EN
+    return f"{base}\n\n{header}\n{fb}"
+
 # -------------------------- 用户提示词--------------------------
 
 # planner - analyze_requirement（第一步：仅需求解析）
@@ -353,13 +399,14 @@ _ROLE_PROMPTS = {
     "coder": SYSTEM_PROMPT_CODER,
     "worker": SYSTEM_PROMPT_WORKER,
     "reporter": SYSTEM_PROMPT_REPORTER,
+    "supervisor": SYSTEM_PROMPT_SUPERVISOR,
 }
 
 
 def get_system_prompt(role: str, lang: str = "zh") -> str:
     """
     根据角色与语言返回系统提示词。
-    role: planner | coder | worker | reporter
+    role: planner | coder | worker | reporter | supervisor
     lang: zh | en
     """
     prompts = _ROLE_PROMPTS.get(role.lower())
