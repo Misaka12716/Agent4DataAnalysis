@@ -67,6 +67,19 @@ class SessionStore:
         return bool(rows), None
 
     @staticmethod
+    def get_session_ids_by_user_id(user_id: int) -> Tuple[List[str], Optional[str]]:
+        """根据 user_id 查询该用户的全部 session_id（按创建顺序倒序）。"""
+        sql = (
+            f"SELECT session_id FROM {TABLE_SESSION_USER} "
+            "WHERE user_id = %s ORDER BY id DESC"
+        )
+        rows, err = mysql_handler.query(sql, (user_id,))
+        if err:
+            return [], err
+        session_ids = [str(row.get("session_id")) for row in rows if row.get("session_id")]
+        return session_ids, None
+
+    @staticmethod
     def set_workspace_path(session_id: str, user_id: int, workspace_abs_path: str) -> Tuple[bool, Optional[str]]:
         """创建或更新会话记录并设置工作区路径。返回 (成功, 错误信息)。"""
         data = {

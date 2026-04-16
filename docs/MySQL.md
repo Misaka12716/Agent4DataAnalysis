@@ -278,7 +278,7 @@ WHERE su.session_id = '你的_session_id';
 ```text
 id=1
 username=alice
-phone=13800138000
+phone=18395299120
 email=alice@example.com
 password_hash=$2b$12$...
 ```

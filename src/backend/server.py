@@ -18,6 +18,7 @@ from backend.route_services import (
     build_session_snapshot_response,
     build_run_analysis_response,
     build_create_session_response,
+    build_user_sessions_response,
 )
 
 # -------------------------- 配置与初始化 --------------------------
@@ -37,8 +38,7 @@ UPLOAD_DIR = "./backend/uploads"  # 文件存储目录（相对于项目根目�
 
 # 创建上传目录（不存在则自动创建）
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-# 设置目录权限（确保服务器可读写）
-os.chmod(UPLOAD_DIR, 0o755)
+
 
 
 
@@ -52,6 +52,11 @@ async def health_check():
 @app.post("/session/create")
 async def create_session(body: CreateSessionRequest):
     return build_create_session_response(body.user_id)
+
+
+@app.get("/session/list")
+async def list_user_sessions(user_id: int):
+    return build_user_sessions_response(user_id)
 
 
 @app.post("/session/upload-excel")

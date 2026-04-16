@@ -37,6 +37,31 @@ logger = logging.getLogger(__name__)
 
 _GRAPH_STREAM_END = object()
 
+
+def _should_try_json_schema_method(llm: ChatOpenAI) -> bool:
+    """
+    部分 OpenAI 兼容网关/本地模型不支持 response_format=json_schema，
+    会返回 500（例如 vocabulary/format 相关报错）。对这些模型直接跳过 json_schema。
+    """
+    model_name = (
+        str(getattr(llm, "model_name", "") or getattr(llm, "model", "") or "")
+        .strip()
+        .lower()
+    )
+    if not model_name:
+        return True
+
+    # 常见本地/兼容模型：优先 function_calling + raw fallback，避免 json_schema 触发网关 500。
+    unsupported_keywords = (
+        "qwen",
+        "llama",
+        "mistral",
+        "deepseek",
+        "gemma",
+        "yi",
+    )
+    return not any(k in model_name for k in unsupported_keywords)
+
 # LangGraph 在传递/合并 dict 状态时可能丢弃不可 JSON 序列化的值（如 asyncio.Queue），
 # 因此事件队列不放入 state，而用 ContextVar 在同一次 ainvoke 调用链上传递。
 _pipeline_event_queue: contextvars.ContextVar[Optional[asyncio.Queue[Any]]] = contextvars.ContextVar(
@@ -302,7 +327,10 @@ async def _supervisor_llm_decision(
     """优先 tool/function 参数承载结构，避免部分模型在 message.content 里混入非 JSON 片段。"""
     last_err: Optional[BaseException] = None
     # 优先使用结构化输出；失败后再退回 raw content 修复解析。
-    for method in ("function_calling", "json_schema"):
+    methods: List[str] = ["function_calling"]
+    if _should_try_json_schema_method(llm):
+        methods.append("json_schema")
+    for method in methods:
         structured = llm.with_structured_output(SupervisorDecision, method=method)
         try:
             out = await structured.ainvoke(messages)

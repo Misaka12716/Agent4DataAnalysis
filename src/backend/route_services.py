@@ -144,3 +144,32 @@ def build_create_session_response(user_id: int) -> JSONResponse:
         },
         status_code=200,
     )
+
+
+def build_user_sessions_response(user_id: int) -> JSONResponse:
+    """
+    查询用户会话列表：返回该 user_id 下全部 session_id。
+    """
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail="user_id 必须为正整数")
+    exists, err = SessionStore.user_exists(user_id)
+    if err:
+        raise HTTPException(status_code=500, detail=f"查询用户失败: {err}")
+    if not exists:
+        raise HTTPException(status_code=404, detail="user_id 不存在，请先登录或注册")
+
+    session_ids, err = SessionStore.get_session_ids_by_user_id(user_id)
+    if err:
+        raise HTTPException(status_code=500, detail=f"查询会话列表失败: {err}")
+
+    return JSONResponse(
+        content={
+            "status": "success",
+            "msg": "query user sessions success",
+            "data": {
+                "user_id": user_id,
+                "session_ids": session_ids,
+            },
+        },
+        status_code=200,
+    )

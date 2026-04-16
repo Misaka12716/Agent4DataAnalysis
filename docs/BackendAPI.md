@@ -25,6 +25,7 @@
 | `/auth/send-sms-code` | `POST` | 发送短信验证码（登录/注册前置步骤） |
 | `/auth/login-with-sms` | `POST` | 短信登录/注册一体：校验后返回user_id |
 | `/session/create` | `POST` | 创建会话：生成session_id，关联user_id与工作区 |
+| `/session/list` | `GET` | 查询用户会话列表：根据user_id返回全部session_id |
 | `/session/upload-excel` | `POST` | 上传Excel/CSV到会话工作区（会话内数据准备） |
 | `/session/snapshot` | `GET` | 获取会话内容快照（查看会话累计内容） |
 | `/run-analysis` | `POST` | 发起流式分析任务（基于会话数据的核心业务） |
@@ -43,7 +44,7 @@
 - 请求体示例：
 ```json
 {
-  "phone": "13800138000"
+  "phone": "18395299120"
 }
 ```
 - 成功返回格式：`application/json`
@@ -57,7 +58,7 @@
   "code": 0,
   "msg": "SMS code sent successfully",
   "data": {
-    "phone": "13800138000",
+    "phone": "18395299120",
     "expires_in": 120
   }
 }
@@ -85,7 +86,7 @@
 - 请求体示例：
 ```json
 {
-  "phone": "13800138000",
+  "phone": "18395299120",
   "code": "123456"
 }
 ```
@@ -103,7 +104,7 @@
   "data": {
     "user_id": 12,
     "username": "user_8000_1713072000",
-    "phone": "13800138000"
+    "phone": "18395299120"
   }
 }
 ```
@@ -164,7 +165,43 @@
 
 ---
 
-### 3.4 上传会话数据文件
+### 3.4 查询用户会话列表
+- 路径：`GET /session/list`
+- 处理函数：`build_user_sessions_response(user_id: int)`
+- 请求参数（query）：
+  - `user_id: int`（必填，正整数）
+- 请求体：无
+- 成功返回格式：`application/json`
+  - `status: str`
+  - `msg: str`
+  - `data.user_id: int`
+  - `data.session_ids: list[str]`
+- 成功返回示例（`200`）：
+```json
+{
+  "status": "success",
+  "msg": "query user sessions success",
+  "data": {
+    "user_id": 12,
+    "session_ids": [
+      "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
+      "71e4f870-2d71-4a23-af6d-6cf60c4fe1fd"
+    ]
+  }
+}
+```
+- 常见错误：
+  - `400`：`user_id` 非正整数
+  - `404`：`user_id` 在 `users` 表不存在
+  - `500`：数据库查询失败
+- 实现逻辑：
+  1. 校验 `user_id > 0` 且在 `users` 表存在。
+  2. 查询 `session_user` 表中该用户对应的全部 `session_id`（按创建顺序倒序）。
+  3. 返回 `session_ids` 数组；无会话时返回空数组。
+
+---
+
+### 3.5 上传会话数据文件
 - 路径：`POST /session/upload-excel`
 - 处理函数：`handle_session_upload_excel(...)`
 - Content-Type：`multipart/form-data`
@@ -207,7 +244,7 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
 
 ---
 
-### 3.5 会话快照查询
+### 3.6 会话快照查询
 - 路径：`GET /session/snapshot`
 - 处理函数：`build_session_snapshot_response(session_id: str)`
 - 请求参数（query）：
@@ -233,7 +270,7 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
 
 ---
 
-### 3.6 流式分析任务（SSE）
+### 3.7 流式分析任务（SSE）
 - 路径：`POST /run-analysis`
 - 处理函数：`build_run_analysis_response(body: StreamingTaskRequest)`
 - Content-Type：`application/json`
@@ -267,7 +304,7 @@ data: {"type":"report_chunk","content":"第一部分结论..."}
 
 ---
 
-### 3.7 健康检查
+### 3.8 健康检查
 - 路径：`GET /health`
 - 处理函数：`build_health_response()`（`src/backend/route_services.py`）
 - 请求参数：无
@@ -297,6 +334,7 @@ data: {"type":"report_chunk","content":"第一部分结论..."}
 - `session_user`：
   - 由 `/session/create` 创建并维护
   - 记录 `session_id -> user_id + workspace_abs_path`
+  - `/session/list` 按 `user_id` 读取其全部 `session_id`
 - `session_content`：
   - 由 `/run-analysis` 的流式过程持续写入
   - 每条事件对应一个新版本（`version` 递增）
@@ -315,7 +353,7 @@ data: {"type":"report_chunk","content":"第一部分结论..."}
 curl -X POST "http://localhost:52716/auth/send-sms-code" \
   -H "Content-Type: application/json" \
   -d '{
-    "phone": "13800138000"
+    "phone": "18395299120"
   }'
 ```
 
@@ -324,7 +362,7 @@ curl -X POST "http://localhost:52716/auth/send-sms-code" \
 curl -X POST "http://localhost:52716/auth/login-with-sms" \
   -H "Content-Type: application/json" \
   -d '{
-    "phone": "13800138000",
+    "phone": "18395299120",
     "code": "123456"
   }'
 ```
@@ -338,19 +376,24 @@ curl -X POST "http://localhost:52716/session/create" \
   }'
 ```
 
-### 5.4 上传数据文件
+### 5.4 查询用户会话列表
+```bash
+curl "http://localhost:52716/session/list?user_id=12"
+```
+
+### 5.5 上传数据文件
 ```bash
 curl -X POST "http://localhost:52716/session/upload-excel" \
   -F "file=@./demo.xlsx" \
   -F "session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 ```
 
-### 5.5 查询快照
+### 5.6 查询快照
 ```bash
 curl "http://localhost:52716/session/snapshot?session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 ```
 
-### 5.6 发起流式分析
+### 5.7 发起流式分析
 ```bash
 curl -N -X POST "http://localhost:52716/run-analysis" \
   -H "Content-Type: application/json" \
@@ -360,7 +403,7 @@ curl -N -X POST "http://localhost:52716/run-analysis" \
   }'
 ```
 
-### 5.7 健康检查
+### 5.8 健康检查
 ```bash
 curl http://localhost:52716/health
 ```

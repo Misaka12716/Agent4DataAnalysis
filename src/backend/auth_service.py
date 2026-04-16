@@ -39,7 +39,7 @@ def build_send_sms_code_response(phone: str) -> JSONResponse:
         )
 
     verification_code = str(random.randint(100000, 999999))
-    content = f"您的验证码是{verification_code}，有效期为2分钟。"
+    content = f"尊敬的用户，您正在进行【数据分析&科学发现智能体】账号验证登录/注册，验证码：{verification_code}，有效期2分钟。请勿向他人泄露验证码，谨防诈骗，如非本人操作请忽略本短信。"
     timestamp = time.strftime("%Y%m%d%H%M%S", time.localtime())
     sign = hashlib.md5(f"{_SMS_APP_ID}{_SMS_SECRET_KEY}{timestamp}".encode("utf-8")).hexdigest()
     params = {

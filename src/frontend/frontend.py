@@ -178,12 +178,12 @@ with tab3:
 
 with tab4:
     st.subheader("用户登录接口测试")
-    st.caption("用于测试发送短信验证码与短信登录（登录/注册一体）接口。")
+    st.caption("用于测试发送短信验证码、短信登录（登录/注册一体）与用户会话列表查询接口。")
     phone = st.text_input(
         "手机号",
-        value="13800138000",
+        value="18395299120",
         key="auth_phone",
-        help="按后端当前规则需为 11 位中国大陆手机号，例如 13800138000",
+        help="按后端当前规则需为 11 位中国大陆手机号，例如 18395299120",
     ).strip()
     sms_code = st.text_input(
         "短信验证码",
@@ -213,6 +213,29 @@ with tab4:
                     st.rerun()
             except httpx.HTTPStatusError as e:
                 st.error(f"创建会话失败 {e.response.status_code}: {e.response.text}")
+            except Exception as e:
+                st.error(str(e))
+        if st.button("查询该用户全部会话", key="btn_list_user_sessions"):
+            try:
+                r = httpx.get(
+                    f"{api_base.rstrip('/')}/session/list",
+                    params={"user_id": logged_user_id},
+                    timeout=10.0,
+                )
+                r.raise_for_status()
+                data = r.json()
+                session_ids = ((data.get("data") or {}).get("session_ids")) or []
+                st.success(f"查询成功，共 {len(session_ids)} 个会话")
+                st.json(data)
+                # 便于继续联调：默认选中最新会话回填到当前会话 ID
+                if session_ids:
+                    latest_session_id = str(session_ids[0]).strip()
+                    if latest_session_id:
+                        st.session_state["session_id"] = latest_session_id
+                        st.session_state["_reset_session_id"] = latest_session_id
+                        st.info(f"已将最新会话回填到当前会话 ID: {latest_session_id}")
+            except httpx.HTTPStatusError as e:
+                st.error(f"查询会话失败 {e.response.status_code}: {e.response.text}")
             except Exception as e:
                 st.error(str(e))
 
@@ -264,5 +287,31 @@ with tab4:
                         st.error(f"请求失败 {e.response.status_code}: {e.response.text}")
                     except Exception as e:
                         st.error(str(e))
+
+    st.markdown("---")
+    st.caption("未登录也可手动输入 user_id 测试 GET /session/list。")
+    manual_user_id = st.number_input(
+        "手动测试 user_id",
+        min_value=1,
+        step=1,
+        value=1,
+        key="manual_user_id_for_session_list",
+    )
+    if st.button("按 user_id 查询会话列表（手动）", key="btn_list_user_sessions_manual"):
+        try:
+            r = httpx.get(
+                f"{api_base.rstrip('/')}/session/list",
+                params={"user_id": int(manual_user_id)},
+                timeout=10.0,
+            )
+            r.raise_for_status()
+            data = r.json()
+            session_ids = ((data.get("data") or {}).get("session_ids")) or []
+            st.success(f"查询成功，共 {len(session_ids)} 个会话")
+            st.json(data)
+        except httpx.HTTPStatusError as e:
+            st.error(f"查询会话失败 {e.response.status_code}: {e.response.text}")
+        except Exception as e:
+            st.error(str(e))
 
 st.sidebar.caption("确保后端已启动: uvicorn backend.server:app --port 52716")
