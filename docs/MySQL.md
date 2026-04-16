@@ -2,23 +2,69 @@
 
 本文档用于本项目本地开发环境的 MySQL 连接、初始化与排查。
 
-## 1. 当前项目默认配置
+## 1. 当前项目默认配置（基于本地 Docker MySQL 8）
 
-配置来源：`src/utils/config.py`
+配置来源：`src/configs/config.py`
 
 - `MYSQL_HOST=localhost`
-- `MYSQL_PORT=3306`
+- `MYSQL_PORT=3307`
 - `MYSQL_USER=root`
-- `MYSQL_PASSWORD=88888888`
+- `MYSQL_PASSWORD=AgentPlatform2026!`
 - `MYSQL_DB=agent_platform`
 - `MYSQL_CHARSET=utf8mb4`
 
 > 说明：以上为开发示例配置，生产环境请改为安全账号与强密码。
 
-## 2. 连接数据库
+## 2. 配置和启动 MySQL
+
+### 2.1 启动命令
+
+当前使用的是 **Docker 单容器方式**，并且映射端口为 `3307:3306`，数据库初始化为 `agent_platform`。
 
 ```bash
-mysql -h localhost -P 3306 -u root -p
+# 1. 创建一个 Docker 卷，用于永久存放 MySQL 数据
+docker volume create mysql8-agent-data
+
+# 2. 运行 MySQL 容器
+sudo docker run -d \
+  --name mysql8-agent \
+  --restart unless-stopped \
+  -p 3307:3306 \
+  -v mysql8-agent-data:/var/lib/mysql \
+  -e MYSQL_ROOT_PASSWORD=AgentPlatform2026! \
+  -e MYSQL_DATABASE=agent_platform \
+  mysql:8.0
+```
+
+> 说明：两种方式的容器配置完全一致，差别仅在于是否需要 `sudo`。
+
+### 2.2 参数解释
+
+- `--name mysql8-agent`：容器名，便于后续 `start/stop/logs/exec`
+- `--restart unless-stopped`：系统重启后自动拉起
+- `-p 3307:3306`：宿主机用 `3307`，容器内 MySQL 仍是 `3306`
+- `-v mysql8-agent-data:/var/lib/mysql`：使用 Docker Volume 持久化数据
+- `-e MYSQL_ROOT_PASSWORD=...`：初始化 root 密码
+- `-e MYSQL_DATABASE=agent_platform`：首次启动自动创建数据库
+
+### 2.3 启动后快速校验
+
+```bash
+sudo docker ps --filter name=mysql8-agent
+sudo docker logs mysql8-agent
+```
+
+看到 `ready for connections` 可认为启动成功。
+
+## 3. 连接数据库
+
+```bash
+mysql -h localhost -P 3307 -u root -p
+```
+或者：
+```
+sudo docker exec -it mysql8-agent mysql -u root -p
+# 输入密码: AgentPlatform2026!
 ```
 
 输入密码后，选择数据库：
@@ -27,10 +73,11 @@ mysql -h localhost -P 3306 -u root -p
 USE agent_platform;
 ```
 
-## 3. 初始化数据库和核心表
+## 4. 初始化数据库和核心表
 
-系统至少依赖两张会话相关表：
+系统核心使用三张表：
 
+- `users`
 - `session_user`
 - `session_content`
 
@@ -42,6 +89,16 @@ CREATE DATABASE IF NOT EXISTS agent_platform
   DEFAULT COLLATE utf8mb4_unicode_ci;
 
 USE agent_platform;
+
+CREATE TABLE IF NOT EXISTS users (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(128) NOT NULL UNIQUE COMMENT '用户名',
+    phone VARCHAR(32) NULL COMMENT '手机号',
+    email VARCHAR(256) NULL COMMENT '邮箱',
+    password_hash VARCHAR(256) NOT NULL COMMENT '密码哈希',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '用户基础信息表';
 
 CREATE TABLE IF NOT EXISTS session_user (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -63,15 +120,16 @@ CREATE TABLE IF NOT EXISTS session_content (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '会话内容存储表';
 ```
 
-## 4. 校验是否创建成功
+## 5. 校验是否创建成功
 
 ```sql
 SHOW TABLES;
+DESC users;
 DESC session_user;
 DESC session_content;
 ```
 
-## 5. 常用排查命令
+## 6. 常用排查命令
 
 查看当前连接和库：
 
@@ -80,26 +138,48 @@ SELECT DATABASE();
 SELECT USER();
 ```
 
-查看 MySQL 是否监听 3306 端口（Linux）：
+查看 MySQL 是否监听 3307 端口（Linux）：
 
 ```bash
-ss -lntp | rg 3306
+ss -lntp | rg 3307
 ```
 
-## 6. 与代码的对应关系
+查看容器状态：
+
+```bash
+sudo docker ps -a --filter name=mysql8-agent
+sudo docker inspect mysql8-agent | rg -n "3307|MYSQL_DATABASE|MYSQL_ROOT_PASSWORD"
+```
+
+容器已存在时，常用启停：
+
+```bash
+sudo docker start mysql8-agent
+sudo docker stop mysql8-agent
+```
+
+## 7. 与代码的对应关系
 
 - 表结构参考：`src/db/models.py`
   - `SESSION_USER_TABLE_DDL`
   - `SESSION_CONTENT_TABLE_DDL`
 - 运行时配置读取：`src/utils/config.py`
 
+请确保代码配置与容器参数一致：
+
+- `MYSQL_HOST=localhost`
+- `MYSQL_PORT=3307`
+- `MYSQL_USER=root`
+- `MYSQL_PASSWORD=AgentPlatform2026!`
+- `MYSQL_DB=agent_platform`
+
 如果你修改了库名、端口或账号密码，请同步更新配置后重启后端服务。
 
-## 7. 查询完整对话记录 / 工作区路径
+## 8. 查询完整对话记录 / 工作区路径
 
 以下查询都以 `session_id` 为主键线索。
 
-### 7.1 查询某个会话对应的工作区路径
+### 8.1 查询某个会话对应的工作区路径
 
 ```sql
 SELECT
@@ -112,7 +192,7 @@ FROM session_user
 WHERE session_id = '你的_session_id';
 ```
 
-### 7.2 查询某个会话的“完整累计内容”
+### 8.2 查询某个会话的“完整累计内容”
 
 `session_content` 采用版本递增写入；通常取最大 `version` 即当前完整内容。
 
@@ -128,7 +208,7 @@ ORDER BY version DESC
 LIMIT 1;
 ```
 
-### 7.3 查询某个会话的历史版本（按时间线）
+### 8.3 查询某个会话的历史版本（按时间线）
 
 ```sql
 SELECT
@@ -153,7 +233,7 @@ WHERE session_id = '你的_session_id'
   AND version = 123;
 ```
 
-### 7.4 一条 SQL 同时取“工作区路径 + 最新完整内容”
+### 8.4 一条 SQL 同时取“工作区路径 + 最新完整内容”
 
 ```sql
 SELECT
@@ -176,11 +256,11 @@ WHERE su.session_id = '你的_session_id';
 
 > 说明：如果会话刚创建、尚未产生流式内容，`sc.*` 可能为 `NULL`，这是正常现象。
 
-## 8. 各表存放内容与数据格式
+## 9. 各表存放内容与数据格式
 
 当前项目核心使用三张表（其中 `users` 为可扩展用户表，`session_*` 为会话主链路核心）。
 
-### 8.1 `users`（用户基础信息）
+### 9.1 `users`（用户基础信息）
 
 用途：存放平台用户账号信息，便于后续做登录、权限、审计扩展。
 
@@ -203,7 +283,7 @@ email=alice@example.com
 password_hash=$2b$12$...
 ```
 
-### 8.2 `session_user`（会话与用户、工作区映射）
+### 9.2 `session_user`（会话与用户、工作区映射）
 
 用途：把 `session_id` 映射到 `user_id` 与会话工作区绝对路径。  
 这是定位“某次对话对应哪个工作目录”的关键表。
@@ -221,10 +301,10 @@ password_hash=$2b$12$...
 ```text
 session_id=1d9c5c6e-3b2a-4c49-8e4f-5f0c6f91c9d2
 user_id=0
-workspace_abs_path=/data/agent_platform/tmp/workspaces/1d9c5c6e-3b2a-4c49-8e4f-5f0c6f91c9d2
+workspace_abs_path=/data1/pjw/AgentPlatform/tmp/workspaces/1d9c5c6e-3b2a-4c49-8e4f-5f0c6f91c9d2
 ```
 
-### 8.3 `session_content`（会话流式内容版本表）
+### 9.3 `session_content`（会话流式内容版本表）
 
 用途：存放会话的流式输出内容，按 `version` 递增。  
 上层逻辑一般将每次事件 JSON 追加到“完整累计内容”，用于断线重连和历史回放。

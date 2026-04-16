@@ -6,6 +6,7 @@ from utils.mysql_utils import mysql_handler
 from db.models import (
     TABLE_SESSION_USER,
     TABLE_SESSION_CONTENT,
+    TABLE_USERS,
     SessionUserRow,
     SessionContentRow,
 )
@@ -25,6 +26,45 @@ class SessionStore:
         if err or not rows:
             return None
         return rows[0].get("workspace_abs_path")
+
+    @staticmethod
+    def get_session_user(session_id: str) -> Tuple[Optional[SessionUserRow], Optional[str]]:
+        """根据 session_id 获取会话-用户映射记录。"""
+        sql = (
+            f"SELECT id, session_id, user_id, workspace_abs_path FROM {TABLE_SESSION_USER} "
+            "WHERE session_id = %s LIMIT 1"
+        )
+        rows, err = mysql_handler.query(sql, (session_id,))
+        if err:
+            return None, err
+        if not rows:
+            return None, None
+        return rows[0], None
+
+    @staticmethod
+    def create_session(session_id: str, user_id: int, workspace_abs_path: str) -> Tuple[bool, Optional[str]]:
+        """创建会话映射；若 session_id 已存在则返回失败。"""
+        exists, err = SessionStore.get_session_user(session_id)
+        if err:
+            return False, err
+        if exists:
+            return False, "session_id already exists"
+        data = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "workspace_abs_path": workspace_abs_path,
+        }
+        _, _, err = mysql_handler.insert(TABLE_SESSION_USER, data)
+        return (err is None, err)
+
+    @staticmethod
+    def user_exists(user_id: int) -> Tuple[bool, Optional[str]]:
+        """校验 users 表中是否存在该 user_id。"""
+        sql = f"SELECT id FROM {TABLE_USERS} WHERE id = %s LIMIT 1"
+        rows, err = mysql_handler.query(sql, (user_id,))
+        if err:
+            return False, err
+        return bool(rows), None
 
     @staticmethod
     def set_workspace_path(session_id: str, user_id: int, workspace_abs_path: str) -> Tuple[bool, Optional[str]]:

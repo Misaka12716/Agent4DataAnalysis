@@ -1,9 +1,10 @@
 from pydantic import BaseModel
+from typing import Optional
 
 
 class WorkflowRequest(BaseModel):
     input_data: str
-    file_info: str | None = "No files uploaded"
+    file_info: Optional[str] = "No files uploaded"
     """
     可选参数：上传文件后的存储路径（从 /upload-file 接口返回的 file_path 字段获取）
     示例："./backend/uploads/20251203_1015_test.pdf"
@@ -17,9 +18,14 @@ class StreamingTaskRequest(BaseModel):
     input_data: str
 
 
+class CreateSessionRequest(BaseModel):
+    user_id: int
+
+
 class SendSmsCodeRequest(BaseModel):
     phone: str
 
 
 class LoginWithSmsRequest(BaseModel):
     phone: str
+    code: str

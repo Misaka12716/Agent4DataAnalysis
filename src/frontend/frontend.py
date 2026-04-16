@@ -4,7 +4,6 @@
 """
 import streamlit as st
 import httpx
-import uuid
 import json
 
 # 后端地址（与 backend/server 默认端口一致）
@@ -13,10 +12,17 @@ API_BASE = "http://localhost:52716"
 st.set_page_config(page_title="Excel 分析智能体测试", layout="wide")
 st.title("Excel 分析智能体 - 测试前端")
 
-# 侧栏：会话与接口地址（用独立 key 存会话 ID，避免与 widget 绑定 key 冲突）
+if "current_user_id" not in st.session_state:
+    st.session_state["current_user_id"] = 0
+if "current_username" not in st.session_state:
+    st.session_state["current_username"] = ""
+
+# 侧栏：会话与接口地址（会话 ID 由后端创建）
 if "session_id" not in st.session_state:
-    st.session_state["session_id"] = str(uuid.uuid4())
-# 若上一步点了「生成新会话 ID」，在创建 widget 前先同步到输入框的 key，避免 widget 创建后再改 key 报错
+    st.session_state["session_id"] = ""
+if "session_id_input" not in st.session_state:
+    st.session_state["session_id_input"] = st.session_state["session_id"]
+# 若上一步点了「创建会话」，在创建 widget 前先同步到输入框的 key，避免 widget 创建后再改 key 报错
 if "_reset_session_id" in st.session_state:
     st.session_state["session_id_input"] = st.session_state.pop("_reset_session_id")
 
@@ -25,16 +31,37 @@ with st.sidebar:
     api_base = st.text_input("后端 API 地址", value=API_BASE, key="api_base")
     session_id_input = st.text_input(
         "会话 ID (Session ID)",
-        value=st.session_state["session_id"],
         key="session_id_input",
         help="同一会话内上传与分析共用此 ID",
     )
     session_id = session_id_input or st.session_state["session_id"]
-    if st.button("生成新会话 ID"):
-        new_id = str(uuid.uuid4())
-        st.session_state["session_id"] = new_id
-        st.session_state["_reset_session_id"] = new_id  # 下一轮在创建 widget 前会同步到 session_id_input
-        st.rerun()
+    current_user_id = int(st.session_state.get("current_user_id", 0) or 0)
+    current_username = st.session_state.get("current_username", "")
+    if current_user_id > 0:
+        st.caption(f"当前登录用户: {current_username} (id={current_user_id})")
+        if st.button("创建新会话（后端生成）"):
+            try:
+                r = httpx.post(
+                    f"{api_base.rstrip('/')}/session/create",
+                    json={"user_id": current_user_id},
+                    timeout=10.0,
+                )
+                r.raise_for_status()
+                resp = r.json()
+                new_id = (((resp.get("data") or {}).get("session_id")) or "").strip()
+                if not new_id:
+                    st.error("创建会话成功但未返回 session_id")
+                else:
+                    st.session_state["session_id"] = new_id
+                    st.session_state["_reset_session_id"] = new_id
+                    st.success(f"会话已创建: {new_id}")
+                    st.rerun()
+            except httpx.HTTPStatusError as e:
+                st.error(f"创建会话失败 {e.response.status_code}: {e.response.text}")
+            except Exception as e:
+                st.error(str(e))
+    else:
+        st.caption("当前登录用户: 未登录（请先登录后创建会话）")
     # 后端健康检查
     try:
         r = httpx.get(f"{api_base.rstrip('/')}/health", timeout=2.0)
@@ -45,8 +72,8 @@ with st.sidebar:
     except Exception as e:
         st.error(f"后端未连接: {e}")
 
-# 三个测试区块
-tab1, tab2, tab3 = st.tabs(["1. 上传 Excel", "2. 会话快照", "3. 流式分析"])
+# 四个测试区块
+tab1, tab2, tab3, tab4 = st.tabs(["1. 上传 Excel", "2. 会话快照", "3. 流式分析", "4. 用户登录"])
 
 with tab1:
     st.subheader("上传 Excel 到会话工作区")
@@ -60,7 +87,7 @@ with tab1:
                     r = httpx.post(
                         f"{api_base.rstrip('/')}/session/upload-excel",
                         files={"file": (uploaded.name, uploaded.read(), uploaded.type or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-                        data={"session_id": session_id, "user_id": "0"},
+                        data={"session_id": session_id},
                         timeout=60.0,
                     )
                     r.raise_for_status()
@@ -148,5 +175,94 @@ with tab3:
             if log_events:
                 with st.expander("查看全部 SSE 事件"):
                     st.json(log_events)
+
+with tab4:
+    st.subheader("用户登录接口测试")
+    st.caption("用于测试发送短信验证码与短信登录（登录/注册一体）接口。")
+    phone = st.text_input(
+        "手机号",
+        value="13800138000",
+        key="auth_phone",
+        help="按后端当前规则需为 11 位中国大陆手机号，例如 13800138000",
+    ).strip()
+    sms_code = st.text_input(
+        "短信验证码",
+        value="",
+        key="auth_sms_code",
+        help="输入收到的 6 位短信验证码",
+    ).strip()
+    logged_user_id = int(st.session_state.get("current_user_id", 0) or 0)
+    if logged_user_id > 0:
+        st.caption(f"已登录用户: {st.session_state.get('current_username', '')} (id={logged_user_id})")
+        if st.button("创建会话（后端生成）", key="btn_create_session_in_tab4"):
+            try:
+                r = httpx.post(
+                    f"{api_base.rstrip('/')}/session/create",
+                    json={"user_id": logged_user_id},
+                    timeout=10.0,
+                )
+                r.raise_for_status()
+                resp = r.json()
+                new_id = (((resp.get("data") or {}).get("session_id")) or "").strip()
+                if not new_id:
+                    st.error("创建会话成功但未返回 session_id")
+                else:
+                    st.session_state["session_id"] = new_id
+                    st.session_state["_reset_session_id"] = new_id
+                    st.success(f"会话已创建: {new_id}")
+                    st.rerun()
+            except httpx.HTTPStatusError as e:
+                st.error(f"创建会话失败 {e.response.status_code}: {e.response.text}")
+            except Exception as e:
+                st.error(str(e))
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("发送短信验证码", key="btn_send_sms_code"):
+            if not phone:
+                st.warning("请先输入手机号")
+            else:
+                with st.spinner("发送中..."):
+                    try:
+                        r = httpx.post(
+                            f"{api_base.rstrip('/')}/auth/send-sms-code",
+                            json={"phone": phone},
+                            timeout=10.0,
+                        )
+                        r.raise_for_status()
+                        data = r.json()
+                        st.success("发送成功")
+                        st.json(data)
+                    except httpx.HTTPStatusError as e:
+                        st.error(f"请求失败 {e.response.status_code}: {e.response.text}")
+                    except Exception as e:
+                        st.error(str(e))
+
+    with col2:
+        if st.button("短信登录 / 自动注册", key="btn_login_with_sms"):
+            if not phone:
+                st.warning("请先输入手机号")
+            elif not sms_code:
+                st.warning("请先输入短信验证码")
+            else:
+                with st.spinner("登录中..."):
+                    try:
+                        r = httpx.post(
+                            f"{api_base.rstrip('/')}/auth/login-with-sms",
+                            json={"phone": phone, "code": sms_code},
+                            timeout=10.0,
+                        )
+                        r.raise_for_status()
+                        data = r.json()
+                        login_data = data.get("data") or {}
+                        st.session_state["current_user_id"] = int(login_data.get("user_id") or 0)
+                        st.session_state["current_username"] = str(login_data.get("username") or "")
+                        st.success("登录成功")
+                        st.json(data)
+                        st.rerun()
+                    except httpx.HTTPStatusError as e:
+                        st.error(f"请求失败 {e.response.status_code}: {e.response.text}")
+                    except Exception as e:
+                        st.error(str(e))
 
 st.sidebar.caption("确保后端已启动: uvicorn backend.server:app --port 52716")

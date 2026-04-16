@@ -2,7 +2,12 @@ import os
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from backend.api_models import StreamingTaskRequest, SendSmsCodeRequest, LoginWithSmsRequest
+from backend.api_models import (
+    StreamingTaskRequest,
+    SendSmsCodeRequest,
+    LoginWithSmsRequest,
+    CreateSessionRequest,
+)
 from backend.auth_service import (
     build_send_sms_code_response,
     build_login_with_sms_response,
@@ -12,6 +17,7 @@ from backend.route_services import (
     handle_session_upload_excel,
     build_session_snapshot_response,
     build_run_analysis_response,
+    build_create_session_response,
 )
 
 # -------------------------- 配置与初始化 --------------------------
@@ -43,13 +49,17 @@ async def health_check():
 
 # -------------------------- 会话工作区与状态接口 --------------------------
 
+@app.post("/session/create")
+async def create_session(body: CreateSessionRequest):
+    return build_create_session_response(body.user_id)
+
+
 @app.post("/session/upload-excel")
 async def session_upload_excel(
     file: UploadFile = File(...),
     session_id: str = Form(...),
-    user_id: int = Form(0),
 ):
-    return await handle_session_upload_excel(file, session_id, user_id)
+    return await handle_session_upload_excel(file, session_id)
 
 
 @app.get("/session/snapshot")
@@ -69,7 +79,7 @@ async def send_sms_code(body: SendSmsCodeRequest):
 
 @app.post("/auth/login-with-sms")
 async def login_with_sms(body: LoginWithSmsRequest):
-    return build_login_with_sms_response(body.phone.strip())
+    return build_login_with_sms_response(body.phone.strip(), body.code.strip())
 
 
 # -------------------------- 启动服务器 --------------------------
