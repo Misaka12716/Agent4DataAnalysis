@@ -6,11 +6,6 @@ conda activate agentPlatform
 python -m pip install -r requirements.txt
 ```
 
-## 安装IPython内核
-```
-python -m ipykernel install --user --name agentPlatform --display-name "Python (agentPlatform)"
-```
-
 ## 启动后端指令
 ```
 cd src 
