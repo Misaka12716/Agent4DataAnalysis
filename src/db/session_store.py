@@ -1,7 +1,7 @@
 # db/session_store.py
 # 基于 MySQLHandler 的会话内容与工作区路径读写（使用 db.models 中的表名与字段）
 
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from utils.mysql_utils import mysql_handler
 from db.models import (
     TABLE_SESSION_USER,
@@ -31,7 +31,7 @@ class SessionStore:
     def get_session_user(session_id: str) -> Tuple[Optional[SessionUserRow], Optional[str]]:
         """根据 session_id 获取会话-用户映射记录。"""
         sql = (
-            f"SELECT id, session_id, user_id, workspace_abs_path FROM {TABLE_SESSION_USER} "
+            f"SELECT id, session_id, user_id, title, workspace_abs_path FROM {TABLE_SESSION_USER} "
             "WHERE session_id = %s LIMIT 1"
         )
         rows, err = mysql_handler.query(sql, (session_id,))
@@ -78,6 +78,56 @@ class SessionStore:
             return [], err
         session_ids = [str(row.get("session_id")) for row in rows if row.get("session_id")]
         return session_ids, None
+
+    @staticmethod
+    def get_sessions_by_user_id(user_id: int) -> Tuple[List[Dict[str, Optional[str]]], Optional[str]]:
+        """根据 user_id 查询会话列表，包含 session_id 和标题（按创建顺序倒序）。"""
+        sql = (
+            f"SELECT session_id, title FROM {TABLE_SESSION_USER} "
+            "WHERE user_id = %s ORDER BY id DESC"
+        )
+        rows, err = mysql_handler.query(sql, (user_id,))
+        if err:
+            return [], err
+        sessions = [
+            {
+                "session_id": str(row.get("session_id")),
+                "title": (row.get("title") or None),
+            }
+            for row in rows
+            if row.get("session_id")
+        ]
+        return sessions, None
+
+    @staticmethod
+    def save_session_title_if_absent(session_id: str, title: str) -> Tuple[bool, bool, Optional[str]]:
+        """
+        会话标题首次写入：如果已存在非空标题则不覆盖。
+        返回 (成功, 是否已写入, 错误信息)。
+        """
+        clean_title = title.strip()
+        if not clean_title:
+            return False, False, "title is empty"
+
+        sql = f"SELECT title FROM {TABLE_SESSION_USER} WHERE session_id = %s LIMIT 1"
+        rows, err = mysql_handler.query(sql, (session_id,))
+        if err:
+            return False, False, err
+        if not rows:
+            return False, False, "session_id not found"
+
+        current_title = (rows[0].get("title") or "").strip()
+        if current_title:
+            return True, False, None
+
+        update_sql = (
+            f"UPDATE {TABLE_SESSION_USER} "
+            "SET title = %s WHERE session_id = %s AND (title IS NULL OR title = '')"
+        )
+        _, err = mysql_handler.execute(update_sql, (clean_title, session_id))
+        if err:
+            return False, False, err
+        return True, True, None
 
     @staticmethod
     def set_workspace_path(session_id: str, user_id: int, workspace_abs_path: str) -> Tuple[bool, Optional[str]]:

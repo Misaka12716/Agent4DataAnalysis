@@ -148,7 +148,7 @@ def build_create_session_response(user_id: int) -> JSONResponse:
 
 def build_user_sessions_response(user_id: int) -> JSONResponse:
     """
-    查询用户会话列表：返回该 user_id 下全部 session_id。
+    查询用户会话列表：返回该 user_id 下全部会话（session_id + title）。
     """
     if user_id <= 0:
         raise HTTPException(status_code=400, detail="user_id 必须为正整数")
@@ -158,7 +158,7 @@ def build_user_sessions_response(user_id: int) -> JSONResponse:
     if not exists:
         raise HTTPException(status_code=404, detail="user_id 不存在，请先登录或注册")
 
-    session_ids, err = SessionStore.get_session_ids_by_user_id(user_id)
+    sessions, err = SessionStore.get_sessions_by_user_id(user_id)
     if err:
         raise HTTPException(status_code=500, detail=f"查询会话列表失败: {err}")
 
@@ -168,7 +168,54 @@ def build_user_sessions_response(user_id: int) -> JSONResponse:
             "msg": "query user sessions success",
             "data": {
                 "user_id": user_id,
-                "session_ids": session_ids,
+                "sessions": sessions,
+            },
+        },
+        status_code=200,
+    )
+
+
+def build_save_session_title_response(session_id: str, title: str) -> JSONResponse:
+    """
+    保存会话标题：如果已有非空标题则不重复写入；仅首次写入有效。
+    """
+    sid = session_id.strip()
+    clean_title = title.strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id 不能为空")
+    if not clean_title:
+        raise HTTPException(status_code=400, detail="title 不能为空")
+
+    session_user, err = SessionStore.get_session_user(sid)
+    if err:
+        raise HTTPException(status_code=500, detail=f"查询会话失败: {err}")
+    if not session_user:
+        raise HTTPException(status_code=404, detail="session_id 不存在，请先创建会话")
+
+    ok, saved, err = SessionStore.save_session_title_if_absent(sid, clean_title)
+    if not ok:
+        if err == "session_id not found":
+            raise HTTPException(status_code=404, detail="session_id 不存在，请先创建会话")
+        if err == "title is empty":
+            raise HTTPException(status_code=400, detail="title 不能为空")
+        raise HTTPException(status_code=500, detail=f"保存会话标题失败: {err}")
+
+    # 已有标题时返回数据库现值，首次写入时返回本次写入值
+    final_title = clean_title
+    if not saved:
+        latest, err = SessionStore.get_session_user(sid)
+        if err:
+            raise HTTPException(status_code=500, detail=f"查询会话标题失败: {err}")
+        final_title = str((latest or {}).get("title") or clean_title)
+
+    return JSONResponse(
+        content={
+            "status": "success",
+            "msg": "session title saved" if saved else "session title already exists",
+            "data": {
+                "session_id": sid,
+                "title": final_title,
+                "saved": saved,
             },
         },
         status_code=200,

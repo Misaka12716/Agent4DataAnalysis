@@ -25,7 +25,8 @@
 | `/auth/send-sms-code` | `POST` | 发送短信验证码（登录/注册前置步骤） |
 | `/auth/login-with-sms` | `POST` | 短信登录/注册一体：校验后返回user_id |
 | `/session/create` | `POST` | 创建会话：生成session_id，关联user_id与工作区 |
-| `/session/list` | `GET` | 查询用户会话列表：根据user_id返回全部session_id |
+| `/session/save-title` | `POST` | 保存会话标题：按 session_id 首次写入标题，已有标题不覆盖 |
+| `/session/list` | `GET` | 查询用户会话列表：根据user_id返回 session_id 与标题 |
 | `/session/upload-excel` | `POST` | 上传Excel/CSV到会话工作区（会话内数据准备） |
 | `/session/snapshot` | `GET` | 获取会话内容快照（查看会话累计内容） |
 | `/run-analysis` | `POST` | 发起流式分析任务（基于会话数据的核心业务） |
@@ -175,7 +176,9 @@
   - `status: str`
   - `msg: str`
   - `data.user_id: int`
-  - `data.session_ids: list[str]`
+  - `data.sessions: list[object]`
+    - `session_id: str`
+    - `title: str | null`
 - 成功返回示例（`200`）：
 ```json
 {
@@ -183,9 +186,15 @@
   "msg": "query user sessions success",
   "data": {
     "user_id": 12,
-    "session_ids": [
-      "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
-      "71e4f870-2d71-4a23-af6d-6cf60c4fe1fd"
+    "sessions": [
+      {
+        "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
+        "title": "Q1 销售分析"
+      },
+      {
+        "session_id": "71e4f870-2d71-4a23-af6d-6cf60c4fe1fd",
+        "title": null
+      }
     ]
   }
 }
@@ -196,12 +205,62 @@
   - `500`：数据库查询失败
 - 实现逻辑：
   1. 校验 `user_id > 0` 且在 `users` 表存在。
-  2. 查询 `session_user` 表中该用户对应的全部 `session_id`（按创建顺序倒序）。
-  3. 返回 `session_ids` 数组；无会话时返回空数组。
+  2. 查询 `session_user` 表中该用户对应的全部 `session_id/title`（按创建顺序倒序）。
+  3. 返回 `sessions` 数组；无会话时返回空数组。
 
 ---
 
-### 3.5 上传会话数据文件
+### 3.5 保存会话标题
+- 路径：`POST /session/save-title`
+- 处理函数：`build_save_session_title_response(session_id: str, title: str)`
+- Content-Type：`application/json`
+- 请求参数（query）：无
+- 请求体参数（JSON）：
+  - `session_id: str`（必填）
+  - `title: str`（必填，去除首尾空格后不能为空）
+- 请求体示例：
+```json
+{
+  "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
+  "title": "Q1 销售分析"
+}
+```
+- 成功返回示例（首次写入，`200`）：
+```json
+{
+  "status": "success",
+  "msg": "session title saved",
+  "data": {
+    "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
+    "title": "Q1 销售分析",
+    "saved": true
+  }
+}
+```
+- 成功返回示例（已存在标题，不覆盖，`200`）：
+```json
+{
+  "status": "success",
+  "msg": "session title already exists",
+  "data": {
+    "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
+    "title": "已存在的标题",
+    "saved": false
+  }
+}
+```
+- 常见错误：
+  - `400`：`session_id` 为空或 `title` 为空
+  - `404`：`session_id` 不存在
+  - `500`：数据库查询/写入失败
+- 实现逻辑：
+  1. 校验参数。
+  2. 校验 `session_id` 存在。
+  3. 若 `title` 已有非空值则不覆盖；若为空则执行首次写入。
+
+---
+
+### 3.6 上传会话数据文件
 - 路径：`POST /session/upload-excel`
 - 处理函数：`handle_session_upload_excel(...)`
 - Content-Type：`multipart/form-data`
@@ -244,7 +303,7 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
 
 ---
 
-### 3.6 会话快照查询
+### 3.7 会话快照查询
 - 路径：`GET /session/snapshot`
 - 处理函数：`build_session_snapshot_response(session_id: str)`
 - 请求参数（query）：
@@ -270,7 +329,7 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
 
 ---
 
-### 3.7 流式分析任务（SSE）
+### 3.8 流式分析任务（SSE）
 - 路径：`POST /run-analysis`
 - 处理函数：`build_run_analysis_response(body: StreamingTaskRequest)`
 - Content-Type：`application/json`
@@ -304,7 +363,7 @@ data: {"type":"report_chunk","content":"第一部分结论..."}
 
 ---
 
-### 3.8 健康检查
+### 3.9 健康检查
 - 路径：`GET /health`
 - 处理函数：`build_health_response()`（`src/backend/route_services.py`）
 - 请求参数：无
@@ -333,8 +392,9 @@ data: {"type":"report_chunk","content":"第一部分结论..."}
 
 - `session_user`：
   - 由 `/session/create` 创建并维护
-  - 记录 `session_id -> user_id + workspace_abs_path`
-  - `/session/list` 按 `user_id` 读取其全部 `session_id`
+  - 记录 `session_id -> user_id + title + workspace_abs_path`
+  - `/session/save-title` 按 `session_id` 首次写入 `title`
+  - `/session/list` 按 `user_id` 读取其全部 `session_id/title`
 - `session_content`：
   - 由 `/run-analysis` 的流式过程持续写入
   - 每条事件对应一个新版本（`version` 递增）
@@ -381,19 +441,29 @@ curl -X POST "http://localhost:52716/session/create" \
 curl "http://localhost:52716/session/list?user_id=12"
 ```
 
-### 5.5 上传数据文件
+### 5.5 保存会话标题
+```bash
+curl -X POST "http://localhost:52716/session/save-title" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
+    "title": "Q1 销售分析"
+  }'
+```
+
+### 5.6 上传数据文件
 ```bash
 curl -X POST "http://localhost:52716/session/upload-excel" \
   -F "file=@./demo.xlsx" \
   -F "session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 ```
 
-### 5.6 查询快照
+### 5.7 查询快照
 ```bash
 curl "http://localhost:52716/session/snapshot?session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 ```
 
-### 5.7 发起流式分析
+### 5.8 发起流式分析
 ```bash
 curl -N -X POST "http://localhost:52716/run-analysis" \
   -H "Content-Type: application/json" \
@@ -403,7 +473,7 @@ curl -N -X POST "http://localhost:52716/run-analysis" \
   }'
 ```
 
-### 5.8 健康检查
+### 5.9 健康检查
 ```bash
 curl http://localhost:52716/health
 ```

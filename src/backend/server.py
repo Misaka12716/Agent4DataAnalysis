@@ -7,6 +7,7 @@ from backend.api_models import (
     SendSmsCodeRequest,
     LoginWithSmsRequest,
     CreateSessionRequest,
+    SaveSessionTitleRequest,
 )
 from backend.auth_service import (
     build_send_sms_code_response,
@@ -19,6 +20,7 @@ from backend.route_services import (
     build_run_analysis_response,
     build_create_session_response,
     build_user_sessions_response,
+    build_save_session_title_response,
 )
 
 # -------------------------- 配置与初始化 --------------------------
@@ -57,6 +59,11 @@ async def create_session(body: CreateSessionRequest):
 @app.get("/session/list")
 async def list_user_sessions(user_id: int):
     return build_user_sessions_response(user_id)
+
+
+@app.post("/session/save-title")
+async def save_session_title(body: SaveSessionTitleRequest):
+    return build_save_session_title_response(body.session_id, body.title)
 
 
 @app.post("/session/upload-excel")

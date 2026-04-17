@@ -59,10 +59,6 @@ sudo docker logs mysql8-agent
 ## 3. 连接数据库
 
 ```bash
-mysql -h localhost -P 3307 -u root -p
-```
-或者：
-```
 sudo docker exec -it mysql8-agent mysql -u root -p
 # 输入密码: AgentPlatform2026!
 ```
@@ -128,6 +124,37 @@ DESC users;
 DESC session_user;
 DESC session_content;
 ```
+
+## 5.1 会话标题字段数据库变更（增量执行）
+
+如果你是从旧版本升级（`session_user` 还没有 `title` 字段），可直接执行以下 SQL。
+
+```sql
+USE agent_platform;
+
+SET @db_name = DATABASE();
+SET @ddl = (
+  SELECT IF(
+    EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = @db_name
+        AND table_name = 'session_user'
+        AND column_name = 'title'
+    ),
+    'SELECT ''column title already exists'' AS msg',
+    'ALTER TABLE session_user ADD COLUMN title VARCHAR(255) NULL COMMENT ''会话标题'' AFTER user_id'
+  )
+);
+
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+DESC session_user;
+```
+
+> 说明：该脚本是幂等的；若 `title` 已存在，不会重复执行 `ALTER TABLE`。
 
 ## 6. 常用排查命令
 
@@ -287,12 +314,14 @@ password_hash=$2b$12$...
 
 用途：把 `session_id` 映射到 `user_id` 与会话工作区绝对路径。  
 这是定位“某次对话对应哪个工作目录”的关键表。
+后端 `GET /session/list` 接口会直接读取本表的 `session_id/title` 并通过 `sessions` 字段返回。
 
 主要字段与格式：
 
 - `id`：`BIGINT`，自增主键
 - `session_id`：`VARCHAR(64)`，会话 ID（唯一）
 - `user_id`：`BIGINT`，用户 ID
+- `title`：`VARCHAR(255)`，会话标题（可空，首次写入后不覆盖）
 - `workspace_abs_path`：`VARCHAR(512)`，会话工作区绝对路径
 - `created_at` / `updated_at`：`TIMESTAMP`
 
@@ -301,6 +330,7 @@ password_hash=$2b$12$...
 ```text
 session_id=1d9c5c6e-3b2a-4c49-8e4f-5f0c6f91c9d2
 user_id=0
+title=Q1 销售数据分析
 workspace_abs_path=/data1/pjw/AgentPlatform/tmp/workspaces/1d9c5c6e-3b2a-4c49-8e4f-5f0c6f91c9d2
 ```
 

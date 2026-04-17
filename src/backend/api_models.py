@@ -22,6 +22,11 @@ class CreateSessionRequest(BaseModel):
     user_id: int
 
 
+class SaveSessionTitleRequest(BaseModel):
+    session_id: str
+    title: str
+
+
 class SendSmsCodeRequest(BaseModel):
     phone: str
 

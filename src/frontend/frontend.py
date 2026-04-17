@@ -16,6 +16,8 @@ if "current_user_id" not in st.session_state:
     st.session_state["current_user_id"] = 0
 if "current_username" not in st.session_state:
     st.session_state["current_username"] = ""
+if "last_user_sessions" not in st.session_state:
+    st.session_state["last_user_sessions"] = []
 
 # 侧栏：会话与接口地址（会话 ID 由后端创建）
 if "session_id" not in st.session_state:
@@ -192,6 +194,27 @@ with tab4:
         help="输入收到的 6 位短信验证码",
     ).strip()
     logged_user_id = int(st.session_state.get("current_user_id", 0) or 0)
+
+    def _render_sessions_picker(sessions: list, key_prefix: str) -> None:
+        if not sessions:
+            st.info("当前没有可展示的会话。")
+            return
+        st.markdown("#### 会话列表（含标题）")
+        for idx, item in enumerate(sessions):
+            sid = str((item or {}).get("session_id") or "").strip()
+            title = str((item or {}).get("title") or "").strip() or "(未命名)"
+            if not sid:
+                continue
+            c1, c2 = st.columns([6, 1])
+            with c1:
+                st.text(f"{idx + 1}. {title} | {sid}")
+            with c2:
+                if st.button("使用", key=f"{key_prefix}_use_session_{idx}_{sid}"):
+                    st.session_state["session_id"] = sid
+                    st.session_state["_reset_session_id"] = sid
+                    st.success(f"已回填会话 ID: {sid}")
+                    st.rerun()
+
     if logged_user_id > 0:
         st.caption(f"已登录用户: {st.session_state.get('current_username', '')} (id={logged_user_id})")
         if st.button("创建会话（后端生成）", key="btn_create_session_in_tab4"):
@@ -224,12 +247,14 @@ with tab4:
                 )
                 r.raise_for_status()
                 data = r.json()
-                session_ids = ((data.get("data") or {}).get("session_ids")) or []
-                st.success(f"查询成功，共 {len(session_ids)} 个会话")
+                sessions = ((data.get("data") or {}).get("sessions")) or []
+                st.session_state["last_user_sessions"] = sessions
+                st.success(f"查询成功，共 {len(sessions)} 个会话")
                 st.json(data)
+                _render_sessions_picker(sessions, key_prefix=f"login_{logged_user_id}")
                 # 便于继续联调：默认选中最新会话回填到当前会话 ID
-                if session_ids:
-                    latest_session_id = str(session_ids[0]).strip()
+                if sessions:
+                    latest_session_id = str((sessions[0] or {}).get("session_id") or "").strip()
                     if latest_session_id:
                         st.session_state["session_id"] = latest_session_id
                         st.session_state["_reset_session_id"] = latest_session_id
@@ -289,7 +314,7 @@ with tab4:
                         st.error(str(e))
 
     st.markdown("---")
-    st.caption("未登录也可手动输入 user_id 测试 GET /session/list。")
+    st.caption("未登录也可手动输入 user_id 测试 GET /session/list（返回 sessions）。")
     manual_user_id = st.number_input(
         "手动测试 user_id",
         min_value=1,
@@ -306,12 +331,20 @@ with tab4:
             )
             r.raise_for_status()
             data = r.json()
-            session_ids = ((data.get("data") or {}).get("session_ids")) or []
-            st.success(f"查询成功，共 {len(session_ids)} 个会话")
+            sessions = ((data.get("data") or {}).get("sessions")) or []
+            st.session_state["last_user_sessions"] = sessions
+            st.success(f"查询成功，共 {len(sessions)} 个会话")
             st.json(data)
+            _render_sessions_picker(sessions, key_prefix=f"manual_{int(manual_user_id)}")
         except httpx.HTTPStatusError as e:
             st.error(f"查询会话失败 {e.response.status_code}: {e.response.text}")
         except Exception as e:
             st.error(str(e))
+
+    cached_sessions = st.session_state.get("last_user_sessions") or []
+    if cached_sessions:
+        st.markdown("---")
+        st.caption("最近一次查询结果（可直接点“使用”回填会话 ID）")
+        _render_sessions_picker(cached_sessions, key_prefix="cached")
 
 st.sidebar.caption("确保后端已启动: uvicorn backend.server:app --port 52716")

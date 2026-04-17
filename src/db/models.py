@@ -53,6 +53,7 @@ SESSION_USER_COLUMNS = [
     "id",
     "session_id",   # VARCHAR(64) NOT NULL UNIQUE
     "user_id",      # BIGINT NOT NULL
+    "title",        # VARCHAR(255) DEFAULT NULL COMMENT '会话标题'
     "workspace_abs_path",  # VARCHAR(512) NOT NULL COMMENT '工作区绝对路径'
     "created_at",
     "updated_at",
@@ -65,6 +66,7 @@ class SessionUserRow(TypedDict, total=False):
     id: int
     session_id: str
     user_id: int
+    title: Optional[str]
     workspace_abs_path: str
     created_at: Optional[str]
     updated_at: Optional[str]
@@ -75,6 +77,7 @@ CREATE TABLE IF NOT EXISTS {TABLE_SESSION_USER} (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     session_id VARCHAR(64) NOT NULL UNIQUE COMMENT '会话ID',
     user_id BIGINT NOT NULL COMMENT '用户ID',
+    title VARCHAR(255) DEFAULT NULL COMMENT '会话标题',
     workspace_abs_path VARCHAR(512) NOT NULL COMMENT '工作区绝对路径',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
