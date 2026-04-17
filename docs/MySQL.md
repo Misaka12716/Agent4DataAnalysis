@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS session_user (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     session_id VARCHAR(64) NOT NULL UNIQUE COMMENT '会话ID',
     user_id BIGINT NOT NULL COMMENT '用户ID',
+    title VARCHAR(255) NULL COMMENT '会话标题',
     workspace_abs_path VARCHAR(512) NOT NULL COMMENT '工作区绝对路径',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -124,37 +125,6 @@ DESC users;
 DESC session_user;
 DESC session_content;
 ```
-
-## 5.1 会话标题字段数据库变更（增量执行）
-
-如果你是从旧版本升级（`session_user` 还没有 `title` 字段），可直接执行以下 SQL。
-
-```sql
-USE agent_platform;
-
-SET @db_name = DATABASE();
-SET @ddl = (
-  SELECT IF(
-    EXISTS (
-      SELECT 1
-      FROM information_schema.columns
-      WHERE table_schema = @db_name
-        AND table_name = 'session_user'
-        AND column_name = 'title'
-    ),
-    'SELECT ''column title already exists'' AS msg',
-    'ALTER TABLE session_user ADD COLUMN title VARCHAR(255) NULL COMMENT ''会话标题'' AFTER user_id'
-  )
-);
-
-PREPARE stmt FROM @ddl;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
-DESC session_user;
-```
-
-> 说明：该脚本是幂等的；若 `title` 已存在，不会重复执行 `ALTER TABLE`。
 
 ## 6. 常用排查命令
 
