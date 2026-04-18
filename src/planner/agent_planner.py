@@ -14,6 +14,7 @@ from planner.planner_utils import (
     run_planner_chain_stream,
     workspace_excel_info_to_structured_markdown,
 )
+from utils.model_logger import log_milestone
 
 from typing import Dict, Any, AsyncGenerator, Optional
 import asyncio
@@ -29,6 +30,7 @@ async def _node_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
 
     if cb:
         await cb("state", {"node": "analyze"})
+    log_milestone(session_id, "planner_graph", "节点 analyze：开始需求解析（LLM）")
 
     user_prompt = get_user_prompt(
         "planner",
@@ -48,6 +50,7 @@ async def _node_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     if not full_content:
+        log_milestone(session_id, "planner_graph", "节点 analyze：需求解析失败（输出为空）")
         return {
             "requirement_analysis": None,
             "error": "规划失败：需求解析输出为空",
@@ -58,6 +61,7 @@ async def _node_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
             "stream_callback": cb,
         }
 
+    log_milestone(session_id, "planner_graph", "节点 analyze：需求解析完成")
     return {
         "requirement_analysis": full_content,
         "error": None,
@@ -87,6 +91,7 @@ async def _node_decompose(state: Dict[str, Any]) -> Dict[str, Any]:
 
     if cb:
         await cb("state", {"node": "decompose"})
+    log_milestone(session_id, "planner_graph", "节点 decompose：开始步骤分解（LLM）")
 
     user_prompt = get_user_prompt(
         "planner",
@@ -107,6 +112,7 @@ async def _node_decompose(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     if not full_content:
+        log_milestone(session_id, "planner_graph", "节点 decompose：步骤分解失败（输出为空）")
         return {
             "steps_outline": None,
             "plan_text": None,
@@ -115,6 +121,7 @@ async def _node_decompose(state: Dict[str, Any]) -> Dict[str, Any]:
 
     steps_outline = full_content
     plan_text = combine_plan_text(requirement_analysis, steps_outline)
+    log_milestone(session_id, "planner_graph", "节点 decompose：步骤分解完成，已合并 plan_text")
     return {
         "requirement_analysis": requirement_analysis,
         "steps_outline": steps_outline,

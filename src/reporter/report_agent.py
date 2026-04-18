@@ -6,7 +6,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
 from configs.prompts import get_system_prompt, get_user_prompt
-from utils.model_logger import log_model_event
+from utils.model_logger import log_model_event, log_phase_end, log_phase_start
 
 
 def _report_user_prompt(planner_summary: str, worker_results: Dict[str, Any], lang: str = "zh") -> str:
@@ -47,6 +47,12 @@ async def stream_report(
     system_prompt = get_system_prompt("reporter", lang)
     user_prompt = _report_user_prompt(planner_summary, worker_results, lang)
 
+    sid = session_id or ""
+    log_phase_start(
+        sid,
+        "reporter_stream",
+        {"planner_summary_chars": len(planner_summary or ""), "lang": lang},
+    )
     # 日志：记录 Reporter 阶段输入
     log_model_event(
         dialogue_id=session_id or "",
@@ -80,4 +86,9 @@ async def stream_report(
         dialogue_id=session_id or "",
         stage="reporter_output",
         content= full_output,
+    )
+    log_phase_end(
+        sid,
+        "reporter_stream",
+        {"output_chars": len(full_output), "status": "ok"},
     )

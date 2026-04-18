@@ -17,3 +17,7 @@ python -m uvicorn backend.server:app --host 0.0.0.0 --port 52716
 cd src
 streamlit run frontend/frontend.py
 ```
+
+## 相关文档
+- SSE 详细说明：[`docs/SSE_Details.md`](SSE_Details.md)
+- 后端接口说明：[`docs/BackendAPI.md`](BackendAPI.md)

@@ -31,10 +31,13 @@ from configs.config import (
     OPENAI_COMPATIBLE_API_BASE,
 )
 from utils.workspace_manager import list_workspace_files, resolve_workspace_root
+from utils.model_logger import log_phase_end, log_phase_start
 from worker.workspace_worker import run_workspace_tasks
 
 logger = logging.getLogger(__name__)
 
+# 用于通知流式消费者“图执行已结束”的哨兵对象。
+# 之所以不用 None，是为了避免和真实事件 payload（可能为 None）混淆。
 _GRAPH_STREAM_END = object()
 
 
@@ -70,6 +73,12 @@ _pipeline_event_queue: contextvars.ContextVar[Optional[asyncio.Queue[Any]]] = co
 
 
 def _get_event_queue() -> asyncio.Queue[Any]:
+    """
+    从 ContextVar 获取当前执行链路绑定的事件队列。
+
+    该函数只应在 run_orchestrated_analysis_stream() 创建的调用栈内使用；
+    若脱离该上下文调用，会抛出 RuntimeError，提示上层缺失初始化步骤。
+    """
     q = _pipeline_event_queue.get()
     if q is None:
         raise RuntimeError("event_queue missing in pipeline state")
@@ -77,19 +86,29 @@ def _get_event_queue() -> asyncio.Queue[Any]:
 
 
 class PipelineState(TypedDict, total=False):
-    # 该状态由 LangGraph 在节点间传递；采用 total=False 允许节点仅返回增量字段。
+    """
+    LangGraph 在节点间流转的共享状态。
+
+    设计要点：
+    - 使用 total=False：允许节点只返回“增量更新”的字段，未返回字段由图框架保留。
+    - 字段按“输入 -> 规划 -> 代码 -> 执行 -> 报告 -> 编排控制”分层，便于路由决策。
+    """
+    # 会话与基础输入
     session_id: str
     input_data: str
     lang: str
+    # Planner 产物
     plan_data: Optional[Dict[str, Any]]
     planner_summary: str
     requirement_analysis: str
     steps_outline: str
+    # 与代码生成/执行相关的上下文和结果
     workspace_context: Dict[str, Any]
     execution_mode: str
     code_file_paths: List[str]
     coder_results: List[Dict[str, Any]]
     worker_results: Optional[Dict[str, Any]]
+    # Supervisor 控制信息
     supervisor_feedback: str
     last_completed_stage: str
     supervisor_invoke_count: int
@@ -102,6 +121,7 @@ class PipelineState(TypedDict, total=False):
 
 
 class SupervisorDecision(BaseModel):
+    """Supervisor LLM 的结构化输出契约。"""
     next_stage: Literal["planner", "coder", "worker", "reporter", "finish"] = Field(
         description="下一步子阶段：planner/coder/worker/reporter，或 finish 结束"
     )
@@ -148,6 +168,11 @@ def _worker_error_text(worker_results: Optional[Dict[str, Any]]) -> str:
 
 
 def _build_planner_summary(plan_data: Dict[str, Any], input_data: str) -> str:
+    """
+    生成给后续 Coder/Reporter 使用的规划摘要文本。
+
+    优先取 Planner 返回的“规划全文”；若缺失则回退为精简 JSON（需求解析 + 步骤分解）。
+    """
     ps = (plan_data.get("规划全文") or "").strip()
     if ps:
         return ps
@@ -171,7 +196,19 @@ def _build_workspace_context(session_id: str) -> Dict[str, Any]:
 
 
 def _clamp_route(state: PipelineState, decision: SupervisorDecision) -> tuple[str, str]:
-    """返回 (next_route, reason)，必要时钳制非法跳转。"""
+    """
+    对 Supervisor 的路由决策做安全钳制，返回 (next_route, reason)。
+
+    背景：
+    - LLM 可能给出“语义上合理但状态上非法”的跳转（例如未执行 Worker 就 finish）。
+    - 该函数作为最终守门员，保证流水线状态机满足最小前置条件。
+
+    主要规则：
+    - 未完成报告前，finish 需满足 plan_ok + code_ok + worker 已运行，否则回退到缺失阶段。
+    - 无有效规划时，任何后续阶段都回退到 planner。
+    - 未有成功代码写入时，不允许直接进入 worker/reporter。
+    - 达到 Supervisor/Planner 重试上限时，优先推进到可收敛阶段，避免死循环。
+    """
     raw = decision.next_stage
     reason = (decision.reason or "").strip()
     extra = ""
@@ -241,17 +278,25 @@ def _clamp_route(state: PipelineState, decision: SupervisorDecision) -> tuple[st
 
 def _supervisor_allowed_hint(state: PipelineState) -> str:
     # 给 Supervisor 的“软约束提示”，用于降低不合理路由概率。
+    # 注意：这是提示而非硬约束，最终仍由 _clamp_route() 保底校验。
     last = (state.get("last_completed_stage") or "").strip()
     plan_ok = _plan_is_valid(state.get("plan_data"))
     code_ok = _code_write_succeeded(state.get("coder_results"))
     wr = state.get("worker_results")
     rep_done = bool(state.get("reporter_done"))
     wfail = wr is not None and not wr.get("success", False)
+    lang = (state.get("lang") or "zh").strip().lower()
+    role_line = (
+        "Role split: Coder stdout = verifiable stats/facts only; Reporter writes narrative conclusions and recommendations from logs—avoid duplication."
+        if lang == "en"
+        else "职责边界：Coder 脚本只应输出统计/事实类结果（stdout）；叙述性结论与建议由 Reporter 根据日志撰写，二者勿重复。"
+    )
 
     lines = [
         f"last_completed_stage={last or '(无)'}",
         f"plan_ok={plan_ok} code_ok={code_ok} worker_ran={wr is not None} worker_success={wr.get('success') if wr else None}",
         f"reporter_done={rep_done} correction_attempts={state.get('correction_attempts', 0)}",
+        role_line,
     ]
     if wfail:
         lines.append(
@@ -271,6 +316,14 @@ def _supervisor_allowed_hint(state: PipelineState) -> str:
 
 
 def _stringify_llm_content(content: Any) -> str:
+    """
+    将不同模型返回的 content 统一折叠为纯文本字符串。
+
+    兼容场景：
+    - 标准字符串内容
+    - 多段列表内容（字符串块、{"text": "..."} 块等）
+    - 其他对象（降级为 str()）
+    """
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -324,7 +377,16 @@ async def _supervisor_llm_decision(
     llm: ChatOpenAI,
     messages: List[Dict[str, str]],
 ) -> SupervisorDecision:
-    """优先 tool/function 参数承载结构，避免部分模型在 message.content 里混入非 JSON 片段。"""
+    """
+    让 Supervisor 以“结构化优先、文本修复兜底”方式输出决策。
+
+    调用策略：
+    1) 先尝试 function_calling（通常兼容性更好）
+    2) 对可能支持的模型再尝试 json_schema
+    3) 若都失败，回落到 raw content，并通过 json_repair 恢复 JSON
+
+    这样可以在多种 OpenAI 兼容网关/模型下提升鲁棒性。
+    """
     last_err: Optional[BaseException] = None
     # 优先使用结构化输出；失败后再退回 raw content 修复解析。
     methods: List[str] = ["function_calling"]
@@ -360,12 +422,25 @@ async def _supervisor_llm_decision(
 async def _supervisor_node(state: PipelineState) -> Dict[str, Any]:
     # Supervisor 只负责“路由决策 + 反馈”，不直接执行业务阶段。
     q = _get_event_queue()
+    session_id = state["session_id"]
 
+    # 先自增计数，再据此判断是否触发强制 reporter。
     n = int(state.get("supervisor_invoke_count") or 0) + 1
+    log_phase_start(
+        session_id,
+        "supervisor",
+        {
+            "invoke": n,
+            "last_completed_stage": state.get("last_completed_stage") or "",
+            "planner_run_count": int(state.get("planner_run_count") or 0),
+            "correction_attempts": int(state.get("correction_attempts") or 0),
+        },
+    )
     force_rep = n >= MAX_SUPERVISOR_INVOCATIONS
 
     lang = state.get("lang") or "zh"
     hint = _supervisor_allowed_hint(state)
+    # 将“用户输入 + 过程反馈 + 执行错误摘要”合并为监督决策上下文。
     payload = {
         "用户原始需求": state.get("input_data", ""),
         "编排反馈": (state.get("supervisor_feedback") or "").strip(),
@@ -393,6 +468,7 @@ async def _supervisor_node(state: PipelineState) -> Dict[str, Any]:
             reason=f"Supervisor LLM 异常，已回退：{e}",
         )
 
+    # 关键：任何 LLM 决策都必须经过钳制，确保状态机合法推进。
     next_route, reason = _clamp_route({**state, "supervisor_invoke_count": n, "force_reporter": force_rep}, decision)
     feedback = (decision.feedback_for_next or "").strip()
     if force_rep and next_route == "reporter":
@@ -409,6 +485,18 @@ async def _supervisor_node(state: PipelineState) -> Dict[str, Any]:
         },
     }
     await q.put(orch)
+
+    log_phase_end(
+        session_id,
+        "supervisor",
+        {
+            "invoke": n,
+            "next_route": next_route,
+            "reason": reason,
+            "feedback_len": len(feedback),
+            "force_reporter": bool(force_rep and not state.get("reporter_done")),
+        },
+    )
 
     return {
         "supervisor_invoke_count": n,
@@ -427,8 +515,19 @@ async def _planner_node(state: PipelineState) -> Dict[str, Any]:
     base_input = (state.get("input_data") or "").strip()
     fb = (state.get("supervisor_feedback") or "").strip()
     input_req = append_orchestrator_feedback(base_input, fb, lang)
+    next_run = int(state.get("planner_run_count") or 0) + 1
+    log_phase_start(
+        session_id,
+        "planner",
+        {
+            "planner_run": next_run,
+            "has_supervisor_feedback": bool(fb),
+            "input_chars": len(input_req),
+        },
+    )
 
     plan_data: Optional[Dict[str, Any]] = None
+    # 透传 Planner 的流式事件，保持前端可观测性。
     async with AgentPlanner() as planner:
         planner.lang = lang
         async for event in planner.run_flow_with_workspace(session_id, input_req):
@@ -436,7 +535,17 @@ async def _planner_node(state: PipelineState) -> Dict[str, Any]:
             if event.get("type") == "stage_result" and event.get("data"):
                 plan_data = event["data"]
 
+    # 规划无效时只记录结果，不提前抛错；交由 Supervisor 继续路由（通常会重试 planner）。
     if not _plan_is_valid(plan_data):
+        log_phase_end(
+            session_id,
+            "planner",
+            {
+                "planner_run": next_run,
+                "plan_valid": False,
+                "planner_summary_len": 0,
+            },
+        )
         return {
             "plan_data": plan_data,
             "planner_summary": "",
@@ -453,6 +562,17 @@ async def _planner_node(state: PipelineState) -> Dict[str, Any]:
     ra = (plan_data.get("需求解析") or "").strip()
     so = (plan_data.get("步骤分解") or "").strip()
     ps = _build_planner_summary(plan_data, base_input)
+    log_phase_end(
+        session_id,
+        "planner",
+        {
+            "planner_run": next_run,
+            "plan_valid": True,
+            "planner_summary_len": len(ps),
+            "requirement_analysis_len": len(ra),
+            "steps_outline_len": len(so),
+        },
+    )
     return {
         "plan_data": plan_data,
         "planner_summary": ps,
@@ -476,6 +596,10 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
     ws = state.get("workspace_context") or _build_workspace_context(session_id)
     wr = state.get("worker_results")
     fb = (state.get("supervisor_feedback") or "").strip()
+    # 是否进入“修复模式”：
+    # 1) Worker 已运行且失败
+    # 2) 之前至少有一次成功写入（说明文件已存在可修补）
+    # 3) 未超过最大修复次数
     use_correct = (
         wr is not None
         and not wr.get("success", False)
@@ -486,7 +610,18 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
     if fb and use_correct:
         err_text = f"{fb}\n\n{err_text}".strip() if err_text else fb
 
+    log_phase_start(
+        session_id,
+        "coder",
+        {
+            "relative_path": rel,
+            "mode": "correct" if use_correct else "generate",
+            "correction_attempts_before": int(state.get("correction_attempts") or 0),
+        },
+    )
+
     if use_correct:
+        # 修复路径：把错误摘要喂给 Coder，定点修补目标文件。
         one = correct_and_write_code(
             session_id,
             rel,
@@ -497,17 +632,22 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
         results = [one]
         corr = int(state.get("correction_attempts") or 0) + 1
     else:
+        # 生成路径：基于 Planner 摘要首次生成代码文件。
         planner_summary = (state.get("planner_summary") or "").strip() or (state.get("input_data") or "")
+        steps_outline = (state.get("steps_outline") or "").strip()
+        task_desc = planner_summary
+        # 有独立「需求解析/步骤分解」时，_generate_code_for_task 以二者为主，task_desc 仅作回退；编排反馈须写入步骤分解（及回退用的 task_desc），否则 Coder 收不到。
+        if fb and not use_correct:
+            steps_outline = append_orchestrator_feedback(steps_outline, fb, lang)
+            task_desc = append_orchestrator_feedback(planner_summary, fb, lang)
         code_specs = [
             {
-                "task_desc": planner_summary,
+                "task_desc": task_desc,
                 "requirement_analysis": state.get("requirement_analysis") or "",
-                "steps_outline": state.get("steps_outline") or "",
+                "steps_outline": steps_outline,
                 "relative_path": rel,
             }
         ]
-        if fb and not use_correct:
-            code_specs[0]["task_desc"] = append_orchestrator_feedback(planner_summary, fb, lang)
         results = generate_and_write_code(
             session_id,
             code_specs,
@@ -517,6 +657,23 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
         corr = int(state.get("correction_attempts") or 0)
 
     await q.put({"type": "coder", "data": results})
+    log_phase_end(
+        session_id,
+        "coder",
+        {
+            "relative_path": rel,
+            "mode": "correct" if use_correct else "generate",
+            "results": [
+                {
+                    "relative_path": r.get("relative_path"),
+                    "success": r.get("success"),
+                    "error": (r.get("error") or "")[:500],
+                }
+                for r in results
+            ],
+            "correction_attempts_after": corr,
+        },
+    )
     return {
         "coder_results": results,
         "workspace_context": ws,
@@ -533,8 +690,23 @@ async def _worker_node(state: PipelineState) -> Dict[str, Any]:
     session_id = state["session_id"]
     mode = state.get("execution_mode") or "simple"
     paths = state.get("code_file_paths") or ["main.py"]
+    log_phase_start(
+        session_id,
+        "worker",
+        {"execution_mode": mode, "paths": paths},
+    )
+    # run_workspace_tasks 为同步函数，这里直接调用即可；
+    # 若后续执行耗时显著，可考虑迁移到线程池。
     results = run_workspace_tasks(session_id, mode, paths)
     await q.put({"type": "worker", "data": results})
+    log_phase_end(
+        session_id,
+        "worker",
+        {
+            "success": bool(results.get("success")),
+            "error_messages_count": len(results.get("error_messages") or []),
+        },
+    )
     return {
         "worker_results": results,
         "last_completed_stage": "worker",
@@ -548,12 +720,22 @@ async def _reporter_node(state: PipelineState) -> Dict[str, Any]:
     session_id = state["session_id"]
     lang = state.get("lang") or "zh"
     summary = (state.get("planner_summary") or "").strip() or (state.get("input_data") or "")
+    # 若无 Worker 结果，构造兜底结构，确保 Reporter 输入契约稳定。
     wr = state.get("worker_results") or {
         "success": False,
         "results": [],
         "logs": "",
         "error_messages": ["尚未执行 Worker"],
     }
+    log_phase_start(
+        session_id,
+        "reporter",
+        {
+            "planner_summary_chars": len(summary),
+            "worker_success": bool(wr.get("success")),
+            "fallback_worker": state.get("worker_results") is None,
+        },
+    )
     async for chunk in stream_report(
         summary,
         wr,
@@ -561,6 +743,7 @@ async def _reporter_node(state: PipelineState) -> Dict[str, Any]:
         session_id=session_id,
     ):
         await q.put({"type": "report_chunk", "content": chunk})
+    log_phase_end(session_id, "reporter", {"stream_finished": True})
     return {
         "reporter_done": True,
         "last_completed_stage": "reporter",
@@ -577,6 +760,7 @@ def _build_pipeline_graph():
     # 必须用带注解的 TypedDict：StateGraph(dict) 会把整份 state 放在单一 __root__ 通道上，
     # 节点若只返回部分键会整包替换 state，导致下一节点缺少 session_id 等字段。
     g = StateGraph(PipelineState)
+    # 节点均为“纯函数式增量更新”：读取 state，返回部分字段覆盖。
     g.add_node("supervisor", _supervisor_node)
     g.add_node("planner", _planner_node)
     g.add_node("coder", _coder_node)
@@ -619,8 +803,15 @@ async def run_orchestrated_analysis_stream(
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     运行可回溯编排流水线，yield 与原先 analysis_stream 兼容的 dict（外加 type=orchestrator）。
+
+    运行模型：
+    - 背景任务执行 LangGraph（_invoke）
+    - 当前协程持续消费 asyncio.Queue 并向调用方 yield
+    - 所有节点事件、异常终态事件都统一经由队列转发
+    - 通过 ContextVar 将队列注入节点执行上下文，避免 state 序列化问题
     """
     q: asyncio.Queue[Any] = asyncio.Queue()
+    # 初始状态：仅填充编排最小闭环所需字段，其余由节点逐步补全。
     initial: PipelineState = {
         "session_id": session_id,
         "input_data": input_data,
@@ -637,10 +828,17 @@ async def run_orchestrated_analysis_stream(
         "workspace_context": {},
     }
 
+    log_phase_start(
+        session_id,
+        "orchestrated_pipeline",
+        {"lang": lang, "input_chars": len(input_data or "")},
+    )
+
     graph = get_pipeline_graph()
 
     async def _invoke():
         terminal_event: Optional[Dict[str, Any]] = None
+        final_state: Optional[Dict[str, Any]] = None
         try:
             # 实际图执行在后台任务中进行；前台通过队列持续消费事件。
             final_state = await graph.ainvoke(initial)
@@ -658,6 +856,14 @@ async def run_orchestrated_analysis_stream(
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
         finally:
+            log_phase_end(
+                session_id,
+                "orchestrated_pipeline",
+                {
+                    "reporter_done": bool(final_state and final_state.get("reporter_done")),
+                    "terminal_event": terminal_event,
+                },
+            )
             # 终态事件与普通阶段事件统一走队列转发，避免依赖函数尾部二次 yield。
             if terminal_event is not None:
                 await q.put(terminal_event)
@@ -665,6 +871,7 @@ async def run_orchestrated_analysis_stream(
 
     token = _pipeline_event_queue.set(q)
     try:
+        # 将图执行放入后台，避免阻塞前台事件消费循环。
         task = asyncio.create_task(_invoke())
         try:
             # 统一从队列转发节点事件，维持与旧 streaming 协议兼容。

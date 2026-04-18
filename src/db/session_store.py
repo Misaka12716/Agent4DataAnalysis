@@ -1,7 +1,8 @@
 # db/session_store.py
 # 基于 MySQLHandler 的会话内容与工作区路径读写（使用 db.models 中的表名与字段）
 
-from typing import Dict, List, Optional, Tuple
+import json
+from typing import Any, Dict, List, Optional, Tuple
 from utils.mysql_utils import mysql_handler
 from db.models import (
     TABLE_SESSION_USER,
@@ -174,7 +175,7 @@ class SessionStore:
         返回 (成功, 新版本号, 错误信息)。
         """
         prev_content, prev_version = SessionStore.get_latest_content(session_id)
-        full_content = (prev_content or "") + new_content
+        full_content = SessionStore._normalize_full_content(prev_content or "", new_content)
         next_version = prev_version + 1
         data = {
             "session_id": session_id,
@@ -196,3 +197,73 @@ class SessionStore:
         }
         _, _, err = mysql_handler.insert(TABLE_SESSION_CONTENT, data)
         return (err is None, err)
+
+    @staticmethod
+    def _normalize_full_content(prev_content: str, new_content: str) -> str:
+        """
+        归一化会话累计内容，约束 llm_chunk 存储形态：
+        1) 连续 llm_chunk 合并成一条；
+        2) 当出现 llm_complete 时，移除其前面连续的 llm_chunk 分片，仅保留 llm_complete。
+        """
+        incoming_line = (new_content or "").strip()
+        if not incoming_line:
+            return prev_content
+
+        incoming_event = SessionStore._parse_json_line(incoming_line)
+        # 非 JSON 行或无 type 字段，保持原有追加语义，避免破坏兼容性。
+        if not incoming_event or "type" not in incoming_event:
+            return prev_content + new_content
+
+        events = SessionStore._parse_event_lines(prev_content)
+        # 历史内容若存在非 JSON 行，回退到原始追加策略，避免意外丢数据。
+        if events is None:
+            return prev_content + new_content
+        incoming_type = str(incoming_event.get("type") or "")
+
+        if incoming_type == "llm_chunk":
+            chunk_text = str(incoming_event.get("content") or "")
+            if events and str(events[-1].get("type") or "") == "llm_chunk":
+                # 连续 chunk 合并，避免数据库中出现多条连续 llm_chunk。
+                merged = dict(events[-1])
+                merged["content"] = str(merged.get("content") or "") + chunk_text
+                events[-1] = merged
+            else:
+                events.append(incoming_event)
+        elif incoming_type == "llm_complete":
+            # 完整结果出现后，回收紧邻的 llm_chunk 分片，只保留 llm_complete。
+            while events and str(events[-1].get("type") or "") == "llm_chunk":
+                events.pop()
+            events.append(incoming_event)
+        else:
+            events.append(incoming_event)
+
+        return SessionStore._dump_event_lines(events)
+
+    @staticmethod
+    def _parse_event_lines(content: str) -> Optional[List[Dict[str, Any]]]:
+        events: List[Dict[str, Any]] = []
+        for raw in (content or "").splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            evt = SessionStore._parse_json_line(line)
+            if evt is None:
+                return None
+            events.append(evt)
+        return events
+
+    @staticmethod
+    def _parse_json_line(line: str) -> Optional[Dict[str, Any]]:
+        try:
+            obj = json.loads(line)
+        except Exception:
+            return None
+        if isinstance(obj, dict):
+            return obj
+        return None
+
+    @staticmethod
+    def _dump_event_lines(events: List[Dict[str, Any]]) -> str:
+        if not events:
+            return ""
+        return "\n".join(json.dumps(e, ensure_ascii=False) for e in events) + "\n"

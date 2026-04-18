@@ -4,7 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
-from utils.model_logger import log_model_event
+from utils.model_logger import log_model_event, log_milestone, log_phase_end, log_phase_start
 
 
 def scalar_or_long_text_block(val: Any) -> str:
@@ -90,6 +90,11 @@ async def run_planner_chain_stream(
     llm = create_llm(streaming=True)
     chain = prompt | llm
 
+    log_phase_start(
+        session_id,
+        f"{stage_base}_llm",
+        "开始 Planner 单步 LLM 流式调用（本步内的输入/输出见下方 *_input / *_output）",
+    )
     log_model_event(
         dialogue_id=session_id,
         stage=f"{stage_base}_input",
@@ -97,6 +102,7 @@ async def run_planner_chain_stream(
     )
 
     full_content = ""
+    log_milestone(session_id, f"{stage_base}_llm", "astream 已开始，正在聚合 token")
     async for chunk in chain.astream({"system": system, "user": user}):
         token = chunk.content if hasattr(chunk, "content") else getattr(chunk, "content", "") or ""
         if not token:
@@ -109,6 +115,11 @@ async def run_planner_chain_stream(
         dialogue_id=session_id,
         stage=f"{stage_base}_output",
         content=full_content,
+    )
+    log_phase_end(
+        session_id,
+        f"{stage_base}_llm",
+        {"output_chars": len(full_content), "status": "ok"},
     )
     if stream_callback:
         await stream_callback("llm_complete", {"content": full_content})

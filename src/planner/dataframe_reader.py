@@ -18,7 +18,7 @@ from configs.config import (
     DEFAULT_MODEL,
     DEFAULT_CODER_MODEL,
 )
-from utils.model_logger import log_model_event
+from utils.model_logger import log_milestone, log_model_event, log_phase_end, log_phase_start
 
 # -------------------------- 全局配置 --------------------------
 SAMPLING_THRESHOLD = 1000
@@ -182,6 +182,11 @@ def fix_df_by_llm_result(
 def llm_header_analysis_node(state: Dict[str, Any]) -> Dict[str, Any]:
     df = state["df"]
     dialogue_id = state.get("dialogue_id", "")
+    log_phase_start(
+        dialogue_id,
+        "dataframe_llm_header",
+        {"shape": getattr(df, "shape", None)},
+    )
     llm = ChatOpenAI(
         model=DEFAULT_MODEL,
         temperature=0.1,
@@ -207,12 +212,15 @@ def llm_header_analysis_node(state: Dict[str, Any]) -> Dict[str, Any]:
     print(
         f"【LLM表头分析结果】\n{json.dumps(llm_result, ensure_ascii=False, indent=2)}"
     )
+    log_phase_end(dialogue_id, "dataframe_llm_header", {"keys": list(llm_result.keys()) if isinstance(llm_result, dict) else "non-dict"})
     return {"llm_header_result": llm_result}
 
 
 def preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
     raw_df = state["df"].copy()
     llm_result = state["llm_header_result"]
+    dialogue_id = state.get("dialogue_id", "")
+    log_milestone(dialogue_id, "dataframe_preprocess", "根据 LLM 结果修正表头并准备抽样")
 
     fixed_df, header_fix_info = fix_df_by_llm_result(raw_df, llm_result)
 
@@ -236,6 +244,11 @@ def preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "header_fix_info": header_fix_info,
     }
+    log_milestone(
+        dialogue_id,
+        "dataframe_preprocess",
+        {"fixed_shape": list(fixed_df.shape), "sample_rows": len(sample_df)},
+    )
 
     return {
         "fixed_df": fixed_df,
@@ -248,6 +261,8 @@ def preprocess_node(state: Dict[str, Any]) -> Dict[str, Any]:
 def stats_analysis_node(state: Dict[str, Any]) -> Dict[str, Any]:
     sample_df = state["sample_df"]
     basic_info = state["basic_info"]
+    dialogue_id = state.get("dialogue_id", "")
+    log_milestone(dialogue_id, "dataframe_stats", "开始缺失值/数值/类别统计")
 
     # 缺失值分析
     missing_info = (sample_df.isnull().sum() / len(sample_df) * 100).round(2).to_dict()
@@ -296,6 +311,14 @@ def stats_analysis_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "categorical_columns": categorical_cols,
         "categorical_statistics": categorical_stats,
     }
+    log_milestone(
+        dialogue_id,
+        "dataframe_stats",
+        {
+            "numeric_n": len(numeric_cols),
+            "categorical_n": len(categorical_cols),
+        },
+    )
 
     return {"stats_info": stats_info}
 
@@ -311,6 +334,11 @@ def generate_report_node(state: Dict[str, Any]) -> Dict[str, Any]:
     stats_info = state["stats_info"]
     header_fix_info = state["header_fix_info"]
     dialogue_id = state.get("dialogue_id", "")
+    log_phase_start(
+        dialogue_id,
+        "dataframe_generate_report",
+        {"basic_info_shape": str(basic_info.get("fixed_shape"))},
+    )
 
     # 2. 构建Prompt（逻辑不变）
     prompt = f"""
@@ -360,6 +388,11 @@ def generate_report_node(state: Dict[str, Any]) -> Dict[str, Any]:
         dialogue_id=dialogue_id,
         stage="dataframe_report_output",
         content={"report": report},
+    )
+    log_phase_end(
+        dialogue_id,
+        "dataframe_generate_report",
+        {"report_chars": len(report or "")},
     )
 
     # 4. 修正：返回字典格式（而非直接修改state），符合LangGraph节点规范

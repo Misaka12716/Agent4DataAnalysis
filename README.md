@@ -39,8 +39,8 @@ AgentPlatform/
 │   ├── worker/                 # 工作区内代码执行
 │   ├── reporter/               # 报告生成（流式 chunk）
 │   ├── db/                     # 会话与数据库模型
-│   ├── utils/                  # 配置、MySQL、工作区管理等工具
-│   └── configs/                # 提示词配置
+│   ├── utils/                  # MySQL、工作区管理等工具
+│   └── configs/                # 提示词等配置
 ├── requirements.txt
 └── README.md
 ```
@@ -50,7 +50,7 @@ AgentPlatform/
 ## 运行环境
 
 - Python: `3.13.x`（项目文档示例为 `3.13.7`）
-- 依赖栈含 **LangChain / LangGraph**（见 `requirements.txt`）
+- 依赖栈含 **LangChain / LangGraph**（见 [`requirements.txt`](requirements.txt)）
 - 数据库: MySQL（用于会话内容和工作区路径持久化）
 - 推荐 OS: Linux
 
@@ -76,7 +76,7 @@ python -m ipykernel install --user --name agentPlatform --display-name "Python (
 
 ## 配置说明
 
-主要配置位于 `src/utils/config.py`。
+主要配置位于 [`src/configs/config.py`](src/configs/config.py)。
 
 关键项（按需修改）：
 
@@ -109,7 +109,7 @@ python -m ipykernel install --user --name agentPlatform --display-name "Python (
 - `session_user`
 - `session_content`
 
-建表 SQL 可参考 `src/db/models.py` 中的：
+建表 SQL 可参考 [`src/db/models.py`](src/db/models.py) 中的：
 
 - `SESSION_USER_TABLE_DDL`
 - `SESSION_CONTENT_TABLE_DDL`
@@ -232,7 +232,7 @@ streamlit run frontend/frontend.py
 ### 1) 后端启动时报 MySQL 连接失败
 
 - 检查 MySQL 是否启动。
-- 检查 `src/utils/config.py` 中 MySQL 配置是否正确。
+- 检查 [`src/configs/config.py`](src/configs/config.py) 中 MySQL 配置是否正确。
 - 确认数据库和表已创建。
 
 ### 2) 流式分析无输出或报错
@@ -254,6 +254,7 @@ streamlit run frontend/frontend.py
 
 ## 相关文档
 
-- 启动说明：`docs/StartInstruction.md`
-- 后端接口说明：`docs/BackendAPI.md`
-- MySQL 说明：`docs/MySQL.md`
+- 启动说明：[`docs/StartInstruction.md`](docs/StartInstruction.md)
+- 后端接口说明：[`docs/BackendAPI.md`](docs/BackendAPI.md)
+- SSE 详细说明：[`docs/SSE_Details.md`](docs/SSE_Details.md)
+- MySQL 说明：[`docs/MySQL.md`](docs/MySQL.md)

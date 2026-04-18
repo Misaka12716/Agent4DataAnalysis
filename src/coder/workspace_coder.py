@@ -12,7 +12,7 @@ from langchain_core.output_parsers import StrOutputParser
 from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_CODER_MODEL
 from configs.prompts import get_coder_system_prompt, get_user_prompt
 from utils.workspace_file_ops import create_python_file, read_file
-from utils.model_logger import log_model_event
+from utils.model_logger import log_milestone, log_model_event, log_phase_end, log_phase_start
 
 
 def _format_workspace_files_info(workspace_context: Optional[Dict[str, Any]], lang: str = "zh") -> str:
@@ -96,6 +96,11 @@ def _generate_code_for_task(
     chain = prompt | llm | StrOutputParser()
     payload = {"user_body": user_body}
 
+    log_milestone(
+        dialogue_id,
+        "coder_single_task",
+        {"action": "generate_code", "relative_path_hint": "见后续写入路径"},
+    )
     # 日志：记录 Coder 阶段输入
     log_model_event(
         dialogue_id=dialogue_id,
@@ -156,6 +161,11 @@ def correct_and_write_code(
     )
     chain = prompt | llm | StrOutputParser()
     payload = {"user_body": user_body}
+    log_phase_start(
+        session_id,
+        "coder_correct",
+        {"relative_path": rel_path},
+    )
     log_model_event(
         dialogue_id=session_id,
         stage="coder_correct_input",
@@ -169,6 +179,11 @@ def correct_and_write_code(
             stage="coder_correct_output",
             content=f"invoke_error: {e}",
         )
+        log_phase_end(
+            session_id,
+            "coder_correct",
+            {"relative_path": rel_path, "invoke_error": str(e)},
+        )
         return {
             "relative_path": rel_path,
             "success": False,
@@ -181,6 +196,11 @@ def correct_and_write_code(
     )
     code = clean_code_from_markdown(raw)
     ok = create_python_file(session_id, rel_path, code, overwrite=True)
+    log_phase_end(
+        session_id,
+        "coder_correct",
+        {"relative_path": rel_path, "write_ok": ok},
+    )
     return {
         "relative_path": rel_path,
         "success": ok,
@@ -203,14 +223,24 @@ def generate_and_write_code(
     :param workspace_context: 可选，工作区文件列表与 Excel 结构，供 Coder 使用真实路径与格式
     :return: [ {"relative_path": str, "success": bool, "error": str|None }, ... ]
     """
+    log_phase_start(
+        session_id,
+        "coder_batch",
+        {"spec_count": len(code_specs)},
+    )
     results = []
-    for spec in code_specs:
+    for i, spec in enumerate(code_specs):
         rel_path = spec.get("relative_path", "main.py")
         if not rel_path.endswith(".py"):
             rel_path = rel_path.rstrip("/") + ".py"
         task_desc = spec.get("task_desc", "")
         req_a = spec.get("requirement_analysis", "")
         steps_o = spec.get("steps_outline", "")
+        log_milestone(
+            session_id,
+            "coder_batch_item",
+            {"index": i + 1, "total": len(code_specs), "relative_path": rel_path},
+        )
         try:
             code = _generate_code_for_task(
                 task_desc=task_desc,
@@ -232,4 +262,12 @@ def generate_and_write_code(
                 "success": False,
                 "error": str(e),
             })
+    log_phase_end(
+        session_id,
+        "coder_batch",
+        {
+            "written": len(results),
+            "all_success": all(r.get("success") for r in results) if results else True,
+        },
+    )
     return results
