@@ -7,3 +7,25 @@ temp_load/
 uploads/
 tools/
 abolished/
+
+# CubeSandbox-specific ignore rules (scoped to avoid affecting other modules)
+/CubeSandbox
+/CubeSandbox/**/target/
+/CubeSandbox/.idea/
+/CubeSandbox/*.iml
+/CubeSandbox/.DS_Store
+/CubeSandbox/Thumbs.db
+/CubeSandbox/.env
+/CubeSandbox/*.env.local
+/CubeSandbox/_output/
+/CubeSandbox/libs/protocols/src/*.rs
+/CubeSandbox/runtime/libs/protocols/src/*.rs
+/CubeSandbox/runtime/agent/src/version.rs
+/CubeSandbox/API/examples/__pycache__/
+/CubeSandbox/API/examples/go/go
+/CubeSandbox/examples/openai-agents-example/__pycache__/
+/CubeSandbox/examples/openai-agents-example/output/
+/CubeSandbox/examples/openai-agents-example/.scratch/
+/CubeSandbox/examples/openai-agents-code-interpreter/__pycache__/
+/CubeSandbox/examples/openai-agents-code-interpreter/output/
+/CubeSandbox/examples/openai-agents-code-interpreter/.scratch/

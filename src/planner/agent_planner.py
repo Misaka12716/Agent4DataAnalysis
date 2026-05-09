@@ -15,6 +15,7 @@ from planner.planner_utils import (
     workspace_excel_info_to_structured_markdown,
 )
 from utils.model_logger import log_milestone
+from utils.session_memory import format_memory_for_prompt, read_session_memory_for_prompt
 
 from typing import Dict, Any, AsyncGenerator, Optional
 import asyncio
@@ -32,12 +33,17 @@ async def _node_analyze(state: Dict[str, Any]) -> Dict[str, Any]:
         await cb("state", {"node": "analyze"})
     log_milestone(session_id, "planner_graph", "节点 analyze：开始需求解析（LLM）")
 
+    session_memory = format_memory_for_prompt(
+        read_session_memory_for_prompt(session_id),
+        lang,
+    )
     user_prompt = get_user_prompt(
         "planner",
         "analyze_requirement",
         lang=lang,
         input_data=input_data,
         file_info=file_info,
+        session_memory=session_memory,
     )
     system = get_planner_step_system_prompt("analyze", lang=lang)
 
@@ -93,6 +99,10 @@ async def _node_decompose(state: Dict[str, Any]) -> Dict[str, Any]:
         await cb("state", {"node": "decompose"})
     log_milestone(session_id, "planner_graph", "节点 decompose：开始步骤分解（LLM）")
 
+    session_memory = format_memory_for_prompt(
+        read_session_memory_for_prompt(session_id),
+        lang,
+    )
     user_prompt = get_user_prompt(
         "planner",
         "decompose_steps",
@@ -100,6 +110,7 @@ async def _node_decompose(state: Dict[str, Any]) -> Dict[str, Any]:
         input_data=input_data,
         file_info=file_info,
         requirement_analysis=requirement_analysis,
+        session_memory=session_memory,
     )
     system = get_planner_step_system_prompt("decompose", lang=lang)
 

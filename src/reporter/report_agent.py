@@ -7,9 +7,15 @@ from langchain_core.prompts import ChatPromptTemplate
 from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
 from configs.prompts import get_system_prompt, get_user_prompt
 from utils.model_logger import log_model_event, log_phase_end, log_phase_start
+from utils.session_memory import format_memory_for_prompt, read_session_memory_for_prompt
 
 
-def _report_user_prompt(planner_summary: str, worker_results: Dict[str, Any], lang: str = "zh") -> str:
+def _report_user_prompt(
+    planner_summary: str,
+    worker_results: Dict[str, Any],
+    lang: str = "zh",
+    session_memory: str = "",
+) -> str:
     """从 configs.prompts 获取报告生成的用户提示并填入参数。"""
     logs = worker_results.get("logs", "")
     errors = worker_results.get("error_messages", [])
@@ -23,11 +29,14 @@ def _report_user_prompt(planner_summary: str, worker_results: Dict[str, Any], la
     if errors:
         error_section = "\n- 错误信息:\n" + "\n".join(f"  - {e}" for e in errors)
     return get_user_prompt(
-        "reporter", "report", lang=lang,
+        "reporter",
+        "report",
+        lang=lang,
         planner_summary=planner_summary,
         success=success,
         execution_logs=logs,
         error_section=error_section,
+        session_memory=session_memory or "",
     )
 
 
@@ -44,10 +53,10 @@ async def stream_report(
     :param lang: 语言
     :yield: 报告文本片段（用于 SSE 等流式推送）
     """
-    system_prompt = get_system_prompt("reporter", lang)
-    user_prompt = _report_user_prompt(planner_summary, worker_results, lang)
-
     sid = session_id or ""
+    system_prompt = get_system_prompt("reporter", lang)
+    mem = format_memory_for_prompt(read_session_memory_for_prompt(sid), lang)
+    user_prompt = _report_user_prompt(planner_summary, worker_results, lang, session_memory=mem)
     log_phase_start(
         sid,
         "reporter_stream",

@@ -13,11 +13,11 @@ DOWNLOAD_FOLDER = os.path.join(TEMP_FOLDER, "downloads/")  # 下载文件存储�
 # 模型相关配置
 # --------------------------
 SUPPORTED_MODELS: List[str] = [
-    "qwen3.5:9b",
-    "qweb3-coder:30b",
+    "qwen3.6:27b-q8_0",
+    "qwen2.5:7b",
 ]  # 支持的模型列表
-DEFAULT_MODEL = "qwen3-coder:30b"  # 默认使用的模型（勿尾随空格，避免兼容 API 拒收）
-DEFAULT_CODER_MODEL = "qwen3-coder:30b"  # 默认使用的模型
+DEFAULT_MODEL = "qwen3.6:27b-q8_0"  # 默认使用的模型（勿尾随空格，避免兼容 API 拒收）
+DEFAULT_CODER_MODEL = "qwen3.6:27b-q8_0"  # 默认使用的模型
 # 顶层编排 Supervisor 路由模型（可与主模型相同）
 DEFAULT_ORCHESTRATOR_MODEL = os.getenv("DEFAULT_ORCHESTRATOR_MODEL", DEFAULT_MODEL)
 # 编排：Supervisor 调用次数上限、子阶段重试上限
@@ -26,6 +26,10 @@ MAX_CODER_CORRECTIONS = int(os.getenv("MAX_CODER_CORRECTIONS", "5"))
 MAX_PLANNER_RETRIES = int(os.getenv("MAX_PLANNER_RETRIES", "4"))
 LANGUAGE = "zh"  # 使用的语言(zn/en)
 
+# 会话记忆 SESSION_MEMORY.md（工作区内 Markdown，供各智能体提示词引用）
+SESSION_MEMORY_ENABLED = os.getenv("SESSION_MEMORY_ENABLED", "1") == "1"
+SESSION_MEMORY_PROMPT_MAX_CHARS = int(os.getenv("SESSION_MEMORY_PROMPT_MAX_CHARS", "6000"))
+
 
 # 是否开启大模型全流程日志记录
 ENABLE_MODEL_LOG: bool = True
@@ -33,7 +37,7 @@ ENABLE_MODEL_LOG: bool = True
 # --------------------------
 # API 相关配置
 # --------------------------
-OPENAI_COMPATIBLE_API_BASE = "http://localhost:11435/v1"  # 兼容OpenAI的API基础地址
+OPENAI_COMPATIBLE_API_BASE = "http://192.168.4.110:12716/v1"  # 兼容OpenAI的API基础地址
 API_KEY = ""  # API访问密钥（为空时可能表示无需密钥）
 WORKFLOW_API_BASE = "162.105.89.4/workflow/api/"  # 工作流API基础地址
 

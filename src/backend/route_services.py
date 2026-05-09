@@ -1,13 +1,25 @@
+import json
 import os
 import uuid
+from datetime import datetime
 
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from backend.analysis_stream import streaming_task_generator
+from backend.analysis_stream import (
+    streaming_task_generator,
+    reconnect_streaming_task_generator,
+)
 from backend.api_models import StreamingTaskRequest
 from db.session_store import SessionStore
-from utils.workspace_manager import init_workspace, generate_data_filename
+from utils.workspace_manager import (
+    init_workspace,
+    generate_data_filename,
+    build_workspace_tree,
+    build_workspace_files_payload,
+)
+from utils.session_memory import persist_workspace_snapshot
+from configs.config import LANGUAGE
 
 MAX_FILE_SIZE = 2048 * 1024 * 1024  # 最大文件大小（2048M，与Nginx配置一致）
 
@@ -60,6 +72,16 @@ async def handle_session_upload_excel(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"保存文件失败: {e}")
 
+    try:
+        persist_workspace_snapshot(
+            session_id,
+            lang=LANGUAGE,
+            note=f"已上传数据文件到工作区：`{safe_name}`。",
+            input_hint="（上传后尚未发起新一轮分析时可参考下列文件列表）",
+        )
+    except Exception:
+        pass
+
     return JSONResponse(
         content={
             "status": "success",
@@ -101,6 +123,21 @@ def build_run_analysis_response(body: StreamingTaskRequest) -> StreamingResponse
         raise HTTPException(status_code=500, detail=f"查询会话失败: {err}")
     if not session_user:
         raise HTTPException(status_code=404, detail="session_id 不存在，请先创建会话")
+    # 在流水线事件之前持久化用户原始输入，便于快照回放时还原完整对话。
+    ok, _, err = SessionStore.append_content(
+        body.session_id,
+        json.dumps(
+            {
+                "type": "user_input",
+                "content": body.input_data,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail=f"保存用户输入失败: {err}")
     try:
         return StreamingResponse(
             streaming_task_generator(body.session_id, body.input_data),
@@ -112,6 +149,32 @@ def build_run_analysis_response(body: StreamingTaskRequest) -> StreamingResponse
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"启动分析任务失败: {str(e)}")
+
+
+def build_reconnect_analysis_response(session_id: str) -> StreamingResponse:
+    """
+    断线恢复流：
+    先把 session 的当前锁存快照推给前端，再在分析未结束时继续推送后续事件。
+    """
+    sid = session_id.strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id 不能为空")
+    session_user, err = SessionStore.get_session_user(sid)
+    if err:
+        raise HTTPException(status_code=500, detail=f"查询会话失败: {err}")
+    if not session_user:
+        raise HTTPException(status_code=404, detail="session_id 不存在，请先创建会话")
+    try:
+        return StreamingResponse(
+            reconnect_streaming_task_generator(sid),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"启动重连流失败: {str(e)}")
 
 
 def build_create_session_response(user_id: int) -> JSONResponse:
@@ -131,6 +194,16 @@ def build_create_session_response(user_id: int) -> JSONResponse:
     ok, err = SessionStore.create_session(session_id, user_id, workspace_abs)
     if not ok:
         raise HTTPException(status_code=500, detail=f"创建会话失败: {err or 'unknown error'}")
+
+    try:
+        persist_workspace_snapshot(
+            session_id,
+            lang=LANGUAGE,
+            note="会话已创建，工作区已初始化。",
+            input_hint="（尚未发起分析）",
+        )
+    except Exception:
+        pass
 
     return JSONResponse(
         content={
@@ -216,6 +289,66 @@ def build_save_session_title_response(session_id: str, title: str) -> JSONRespon
                 "session_id": sid,
                 "title": final_title,
                 "saved": saved,
+            },
+        },
+        status_code=200,
+    )
+
+
+def build_session_workspace_tree_response(session_id: str) -> JSONResponse:
+    """
+    查询会话工作区目录树：返回该 session_id 对应工作区下的完整层级结构。
+    """
+    sid = session_id.strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id 不能为空")
+
+    session_user, err = SessionStore.get_session_user(sid)
+    if err:
+        raise HTTPException(status_code=500, detail=f"查询会话失败: {err}")
+    if not session_user:
+        raise HTTPException(status_code=404, detail="session_id 不存在，请先创建会话")
+
+    workspace_abs = str(session_user.get("workspace_abs_path") or "").strip()
+    if not workspace_abs:
+        raise HTTPException(status_code=500, detail="会话工作区路径缺失")
+
+    if not os.path.isdir(workspace_abs):
+        tree = {
+            "name": "",
+            "type": "directory",
+            "relative_path": "",
+            "children": [],
+        }
+        return JSONResponse(
+            content={
+                "status": "success",
+                "msg": "workspace not found, return empty tree",
+                "data": {
+                    "session_id": sid,
+                    "workspace_abs_path": workspace_abs,
+                    "tree": tree,
+                    "files": [],
+                },
+            },
+            status_code=200,
+        )
+
+    try:
+        tree = build_workspace_tree(workspace_abs)
+        files = build_workspace_files_payload(workspace_abs)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"构建工作区目录树失败: {e}")
+
+    return JSONResponse(
+        content={
+            "status": "success",
+            "msg": "query workspace tree success",
+            "data": {
+                "session_id": sid,
+                "workspace_abs_path": workspace_abs,
+                "tree": tree,
+                "files": files,
             },
         },
         status_code=200,

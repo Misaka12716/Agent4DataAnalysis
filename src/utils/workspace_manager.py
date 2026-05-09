@@ -3,7 +3,8 @@
 
 import os
 import uuid
-from typing import Optional
+import base64
+from typing import Dict, List, Optional
 
 # 工作区根目录（与 config 中 TEMP 或专用目录对齐）
 from configs.config import TEMP_FOLDER
@@ -139,3 +140,87 @@ def get_workspace_session_id_from_abs_path(absolute_path: str) -> Optional[str]:
     rel = os.path.relpath(path, root)
     parts = rel.split(os.sep)
     return parts[0] if parts else None
+
+
+def build_workspace_tree(workspace_abs: str) -> Dict[str, object]:
+    """
+    构建工作区目录树，返回目录与文件的层级结构。
+    """
+    root = os.path.abspath(workspace_abs)
+
+    def _walk(abs_path: str, rel_path: str) -> Dict[str, object]:
+        node_name = os.path.basename(abs_path) if rel_path else ""
+        if os.path.isdir(abs_path):
+            children: List[Dict[str, object]] = []
+            try:
+                entries = sorted(os.listdir(abs_path))
+            except OSError:
+                entries = []
+            for entry in entries:
+                child_abs = os.path.join(abs_path, entry)
+                child_rel = os.path.join(rel_path, entry) if rel_path else entry
+                children.append(_walk(child_abs, child_rel))
+            return {
+                "name": node_name,
+                "type": "directory",
+                "relative_path": rel_path,
+                "children": children,
+            }
+
+        file_size = 0
+        try:
+            file_size = int(os.path.getsize(abs_path))
+        except OSError:
+            file_size = 0
+        return {
+            "name": node_name,
+            "type": "file",
+            "relative_path": rel_path,
+            "size": file_size,
+        }
+
+    return _walk(root, "")
+
+
+def build_workspace_files_payload(workspace_abs: str) -> List[Dict[str, object]]:
+    """
+    返回工作区内全部实际文件数据（包含内容）：
+    - UTF-8 可解码文件：encoding=text，content 为文本内容
+    - 非 UTF-8 文件：encoding=base64，content 为 base64 文本
+    """
+    root = os.path.abspath(workspace_abs)
+    files: List[Dict[str, object]] = []
+
+    for current_root, dir_names, file_names in os.walk(root):
+        dir_names.sort()
+        file_names.sort()
+        for file_name in file_names:
+            abs_path = os.path.join(current_root, file_name)
+            rel_path = os.path.relpath(abs_path, root)
+            rel_path = rel_path.replace(os.sep, "/")
+
+            try:
+                with open(abs_path, "rb") as f:
+                    raw = f.read()
+                size = int(len(raw))
+            except OSError:
+                continue
+
+            try:
+                content = raw.decode("utf-8")
+                encoding = "text"
+            except UnicodeDecodeError:
+                content = base64.b64encode(raw).decode("ascii")
+                encoding = "base64"
+
+            files.append(
+                {
+                    "name": file_name,
+                    "relative_path": rel_path,
+                    "size": size,
+                    "encoding": encoding,
+                    "content": content,
+                }
+            )
+
+    return files

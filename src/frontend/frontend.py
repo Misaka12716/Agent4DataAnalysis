@@ -74,10 +74,12 @@ with st.sidebar:
     except Exception as e:
         st.error(f"后端未连接: {e}")
 
-# 四个测试区块
-tab1, tab2, tab3, tab4 = st.tabs(["1. 上传 Excel", "2. 会话快照", "3. 流式分析", "4. 用户登录"])
+# 五个测试区块（按逻辑先后：登录/会话 -> 上传数据 -> 工作区目录与文件 -> 流式分析 -> 快照校验）
+tab_login, tab_upload, tab_workspace, tab_analysis, tab_snapshot = st.tabs(
+    ["1. 用户登录与会话", "2. 上传 Excel", "3. 工作区目录与文件", "4. 流式分析", "5. 会话快照"]
+)
 
-with tab1:
+with tab_upload:
     st.subheader("上传 Excel 到会话工作区")
     st.caption("调用 POST /session/upload-excel，文件会保存到该会话工作区根目录。")
     uploaded = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls","csv"], key="upload_excel")
@@ -101,7 +103,7 @@ with tab1:
                 except Exception as e:
                     st.error(str(e))
 
-with tab2:
+with tab_snapshot:
     st.subheader("会话快照（断线重连）")
     st.caption("调用 GET /session/snapshot，获取该会话的完整累计内容与版本号。")
     if st.button("拉取快照", key="btn_snapshot"):
@@ -126,59 +128,121 @@ with tab2:
                 except Exception as e:
                     st.error(str(e))
 
-with tab3:
+with tab_workspace:
+    st.subheader("工作区目录树与实际文件")
+    st.caption("调用 GET /session/workspace-tree，返回目录树（tree）与实际文件数据（files）。")
+    if st.button("拉取工作区目录与文件", key="btn_workspace_tree"):
+        if not session_id:
+            st.warning("请先填写会话 ID")
+        else:
+            with st.spinner("拉取中..."):
+                try:
+                    r = httpx.get(
+                        f"{api_base.rstrip('/')}/session/workspace-tree",
+                        params={"session_id": session_id},
+                        timeout=30.0,
+                    )
+                    r.raise_for_status()
+                    data = r.json()
+                    payload = data.get("data") or {}
+                    tree = payload.get("tree") or {}
+                    files = payload.get("files") or []
+
+                    st.success(f"拉取成功，文件数: {len(files)}")
+                    st.markdown("#### 目录树（tree）")
+                    st.json(tree)
+
+                    st.markdown("#### 实际文件（files）")
+                    st.json(files)
+                except httpx.HTTPStatusError as e:
+                    st.error(f"请求失败 {e.response.status_code}: {e.response.text}")
+                except Exception as e:
+                    st.error(str(e))
+
+with tab_analysis:
     st.subheader("流式分析任务")
-    st.caption("调用 POST /run-analysis，绑定当前会话，执行 Planner→Coder→Worker→Reporter，实时显示 SSE 推送。")
+    st.caption("调用 POST /run-analysis（开始）或 POST /run-analysis/reconnect（断线恢复），实时显示 SSE 推送。")
     input_data = st.text_area(
         "分析需求 (input_data)",
         value="请对工作区目录下的 Excel 做简单描述性统计，并给出结论。",
         height=80,
         key="input_data",
     )
+    stream_placeholder = st.empty()
+
+    def _run_sse(endpoint: str, req_json: dict, timeout_seconds: float = 300.0):
+        log_events = []
+        report_parts = []
+        snapshot_content = ""
+        snapshot_version = 0
+        try:
+            with httpx.stream(
+                "POST",
+                f"{api_base.rstrip('/')}{endpoint}",
+                json=req_json,
+                timeout=timeout_seconds,
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    try:
+                        payload = json.loads(line[5:].strip())
+                        log_events.append(payload)
+                        event_type = str(payload.get("type") or "")
+                        if event_type == "snapshot":
+                            snapshot_content = str(payload.get("content") or "")
+                            snapshot_version = int(payload.get("version") or 0)
+                        elif event_type == "report_chunk":
+                            report_parts.append(str(payload.get("content") or ""))
+                        # 实时更新占位：事件数 + 快照版本 + 已收报告长度
+                        with stream_placeholder.container():
+                            st.caption(
+                                f"已接收 {len(log_events)} 条事件，快照版本 {snapshot_version}，报告片段 {len(''.join(report_parts))} 字"
+                            )
+                            if snapshot_content:
+                                st.markdown("---\n**快照锁存内容（重连首帧）**\n")
+                                st.text_area(
+                                    "snapshot_content_view",
+                                    value=snapshot_content,
+                                    height=180,
+                                    key=f"snapshot_content_view_{endpoint}",
+                                )
+                            if report_parts:
+                                st.markdown("---\n**报告内容（流式）**\n")
+                                st.markdown("".join(report_parts))
+                    except json.JSONDecodeError:
+                        log_events.append({"raw": line[:200]})
+        except httpx.HTTPStatusError as e:
+            st.error(f"请求失败 {e.response.status_code}: {e.response.text}")
+        except Exception as e:
+            st.error(str(e))
+
+        if log_events:
+            with st.expander("查看全部 SSE 事件"):
+                st.json(log_events)
+
     if st.button("开始流式分析", key="btn_run_analysis"):
         if not session_id:
             st.warning("请先填写会话 ID")
         else:
-            stream_placeholder = st.empty()
-            log_events = []
-            report_parts = []
-            try:
-                with httpx.stream(
-                    "POST",
-                    f"{api_base.rstrip('/')}/run-analysis",
-                    json={"session_id": session_id, "input_data": input_data},
-                    timeout=300.0,
-                ) as resp:
-                    resp.raise_for_status()
-                    for line in resp.iter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        try:
-                            payload = json.loads(line[5:].strip())
-                            log_events.append(payload)
-                            if payload.get("type") == "report_chunk":
-                                report_parts.append(payload.get("content", ""))
-                            # 实时更新占位：事件数 + 已收报告长度
-                            with stream_placeholder.container():
-                                st.caption(f"已接收 {len(log_events)} 条事件，报告片段 {len(''.join(report_parts))} 字")
-                                if report_parts:
-                                    st.markdown("---\n**报告内容（流式）**\n")
-                                    st.markdown("".join(report_parts))
-                        except json.JSONDecodeError:
-                            log_events.append({"raw": line[:200]})
-            except httpx.HTTPStatusError as e:
-                st.error(f"请求失败 {e.response.status_code}: {e.response.text}")
-            except Exception as e:
-                st.error(str(e))
-            # 结束后展示完整报告与事件列表
-            # if report_parts:
-            #     st.subheader("最终报告")
-            #     st.markdown("".join(report_parts))
-            if log_events:
-                with st.expander("查看全部 SSE 事件"):
-                    st.json(log_events)
+            _run_sse(
+                "/run-analysis",
+                {"session_id": session_id, "input_data": input_data},
+                timeout_seconds=300.0,
+            )
 
-with tab4:
+    if st.button("断线恢复（reconnect）", key="btn_run_analysis_reconnect"):
+        if not session_id:
+            st.warning("请先填写会话 ID")
+        else:
+            _run_sse(
+                "/run-analysis/reconnect",
+                {"session_id": session_id},
+                timeout_seconds=300.0,
+            )
+
+with tab_login:
     st.subheader("用户登录接口测试")
     st.caption("用于测试发送短信验证码、短信登录（登录/注册一体）与用户会话列表查询接口。")
     phone = st.text_input(

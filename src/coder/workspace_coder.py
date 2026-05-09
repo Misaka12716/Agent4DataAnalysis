@@ -13,6 +13,7 @@ from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_CODER_MO
 from configs.prompts import get_coder_system_prompt, get_user_prompt
 from utils.workspace_file_ops import create_python_file, read_file
 from utils.model_logger import log_milestone, log_model_event, log_phase_end, log_phase_start
+from utils.session_memory import format_memory_for_prompt, read_session_memory_for_prompt
 
 
 def _format_workspace_files_info(workspace_context: Optional[Dict[str, Any]], lang: str = "zh") -> str:
@@ -60,6 +61,7 @@ def _generate_code_for_task(
     dialogue_id: str = "",
     requirement_analysis: str = "",
     steps_outline: str = "",
+    session_memory_excerpt: str = "",
 ) -> str:
     """根据（一）数据文件信息（二）需求解析（三）步骤分解生成纯 Python 代码（不写文件）。"""
     system_prompt = get_coder_system_prompt("generate", lang=lang)
@@ -83,6 +85,12 @@ def _generate_code_for_task(
         requirement_analysis=ra or "（空）",
         steps_outline=so or "（空）",
     )
+    mem_raw = (session_memory_excerpt or "").strip()
+    if not mem_raw:
+        mem_raw = read_session_memory_for_prompt(dialogue_id)
+    mem_block = format_memory_for_prompt(mem_raw, lang) if mem_raw else ""
+    if mem_block:
+        user_body = user_body + mem_block
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
         ("user", "{user_body}"),
@@ -126,6 +134,7 @@ def correct_and_write_code(
     error_msg: str,
     lang: str = "zh",
     workspace_context: Optional[Dict[str, Any]] = None,
+    session_memory_excerpt: str = "",
 ) -> Dict[str, Any]:
     """
     读取工作区内已有 Python 文件，根据执行错误信息修正后写回。
@@ -149,6 +158,12 @@ def correct_and_write_code(
         error_msg=err,
     )
     user_body = get_user_prompt("coder", "correct", lang=lang)
+    mem_raw = (session_memory_excerpt or "").strip()
+    if not mem_raw:
+        mem_raw = read_session_memory_for_prompt(session_id)
+    mem_block = format_memory_for_prompt(mem_raw, lang) if mem_raw else ""
+    if mem_block:
+        user_body = user_body + mem_block
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
         ("user", "{user_body}"),
@@ -213,6 +228,7 @@ def generate_and_write_code(
     code_specs: List[Dict[str, Any]],
     lang: str = "zh",
     workspace_context: Optional[Dict[str, Any]] = None,
+    session_memory_excerpt: str = "",
 ) -> List[Dict[str, Any]]:
     """
     根据规划生成代码并写入工作区。
@@ -249,6 +265,7 @@ def generate_and_write_code(
                 dialogue_id=session_id,
                 requirement_analysis=req_a,
                 steps_outline=steps_o,
+                session_memory_excerpt=session_memory_excerpt,
             )
             ok = create_python_file(session_id, rel_path, code, overwrite=True)
             results.append({

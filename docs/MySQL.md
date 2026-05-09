@@ -19,18 +19,20 @@
 
 ### 2.1 启动命令
 
-当前使用的是 **Docker 单容器方式**，并且映射端口为 `3307:3306`，数据库初始化为 `agent_platform`。
+当前使用的是 **Docker 单容器方式**，并且映射端口为 `3307:3306`，数据库初始化为 `agent_platform`。  
+考虑到根分区 `/` 可能写满，推荐将 MySQL 数据目录直接挂载到 `/data1`。
 
 ```bash
-# 1. 创建一个 Docker 卷，用于永久存放 MySQL 数据
-docker volume create mysql8-agent-data
+# 1. 在 /data1 创建 MySQL 数据目录
+sudo mkdir -p /data1/mysql/mysql8-agent-data
+sudo chown -R 999:999 /data1/mysql/mysql8-agent-data
 
-# 2. 运行 MySQL 容器
+# 2. 运行 MySQL 容器（绑定挂载到 /data1）
 sudo docker run -d \
   --name mysql8-agent \
   --restart unless-stopped \
   -p 3307:3306 \
-  -v mysql8-agent-data:/var/lib/mysql \
+  -v /data1/mysql/mysql8-agent-data:/var/lib/mysql \
   -e MYSQL_ROOT_PASSWORD=AgentPlatform2026! \
   -e MYSQL_DATABASE=agent_platform \
   mysql:8.0
@@ -43,7 +45,7 @@ sudo docker run -d \
 - `--name mysql8-agent`：容器名，便于后续 `start/stop/logs/exec`
 - `--restart unless-stopped`：系统重启后自动拉起
 - `-p 3307:3306`：宿主机用 `3307`，容器内 MySQL 仍是 `3306`
-- `-v mysql8-agent-data:/var/lib/mysql`：使用 Docker Volume 持久化数据
+- `-v /data1/mysql/mysql8-agent-data:/var/lib/mysql`：将数据落盘到 `/data1`，避免根分区写满
 - `-e MYSQL_ROOT_PASSWORD=...`：初始化 root 密码
 - `-e MYSQL_DATABASE=agent_platform`：首次启动自动创建数据库
 
@@ -154,6 +156,45 @@ sudo docker inspect mysql8-agent | rg -n "3307|MYSQL_DATABASE|MYSQL_ROOT_PASSWOR
 sudo docker start mysql8-agent
 sudo docker stop mysql8-agent
 ```
+
+### 6.1 根分区写满（1114）时迁移到 `/data1`
+
+当出现 `ERROR 1114 (HY000): The table 'xxx' is full` 且 `df -h` 显示 `/` 已 100% 时，可按以下步骤迁移。
+
+```bash
+# 0. 停容器（避免迁移期间写入）
+sudo docker stop mysql8-agent
+
+# 1. 在 /data1 创建新数据目录
+sudo mkdir -p /data1/mysql/mysql8-agent-data
+sudo chown -R 999:999 /data1/mysql/mysql8-agent-data
+
+# 2. 若旧容器已存在，把旧数据目录拷贝到 /data1（保留权限/时间）
+# 先查看旧挂载源路径（Mounts.Source）
+sudo docker inspect mysql8-agent | rg -n "Source|Destination"
+# 假设旧路径是 /var/lib/docker/volumes/mysql8-agent-data/_data
+sudo rsync -aHAX /var/lib/docker/volumes/mysql8-agent-data/_data/ /data1/mysql/mysql8-agent-data/
+
+# 3. 删除旧容器（仅删除容器，不删 /data1 目录里的数据）
+sudo docker rm mysql8-agent
+
+# 4. 使用 /data1 目录重新创建容器
+sudo docker run -d \
+  --name mysql8-agent \
+  --restart unless-stopped \
+  -p 3307:3306 \
+  -v /data1/mysql/mysql8-agent-data:/var/lib/mysql \
+  -e MYSQL_ROOT_PASSWORD=AgentPlatform2026! \
+  -e MYSQL_DATABASE=agent_platform \
+  mysql:8.0
+
+# 5. 校验
+df -h
+sudo docker logs mysql8-agent | rg -n "ready for connections"
+sudo docker exec -it mysql8-agent mysql -u root -p -e "SHOW DATABASES;"
+```
+
+> 说明：如旧数据不需要保留，可跳过 `rsync`，直接新建空库。
 
 ## 7. 与代码的对应关系
 

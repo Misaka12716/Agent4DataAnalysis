@@ -28,8 +28,10 @@
 | `/session/save-title` | `POST` | 保存会话标题：按 session_id 首次写入标题，已有标题不覆盖 |
 | `/session/list` | `GET` | 查询用户会话列表：根据user_id返回 session_id 与标题 |
 | `/session/upload-excel` | `POST` | 上传Excel/CSV到会话工作区（会话内数据准备） |
+| `/session/workspace-tree` | `GET` | 查询会话工作区目录树：根据session_id返回目录结构与文件归属关系 |
 | `/session/snapshot` | `GET` | 获取会话内容快照（查看会话累计内容） |
 | `/run-analysis` | `POST` | 发起流式分析任务（基于会话数据的核心业务） |
+| `/run-analysis/reconnect` | `POST` | 断线恢复流：先返回锁存快照，再按需续传后续SSE事件 |
 | `/health` | `GET` | 健康检查（服务可用性基础校验） |
 
 ---
@@ -329,7 +331,80 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
 
 ---
 
-### 3.8 流式分析任务（SSE）
+### 3.8 会话工作区目录树查询
+- 路径：`GET /session/workspace-tree`
+- 处理函数：`build_session_workspace_tree_response(session_id: str)`
+- 请求参数（query）：
+  - `session_id: str`（必填）
+- 请求体：无
+- 成功返回格式：`application/json`
+  - `status: str`
+  - `msg: str`
+  - `data.session_id: str`
+  - `data.workspace_abs_path: str`
+  - `data.tree: object`（目录树节点）
+    - 目录节点：`name`、`type=directory`、`relative_path`、`children`
+    - 文件节点：`name`、`type=file`、`relative_path`、`size`
+  - `data.files: list[object]`（实际文件数据）
+    - `name: str`
+    - `relative_path: str`
+    - `size: int`
+    - `encoding: "text" | "base64"`
+    - `content: str`（`text` 为原文；`base64` 为文件二进制的 Base64 编码）
+- 成功返回示例（`200`）：
+```json
+{
+  "status": "success",
+  "msg": "query workspace tree success",
+  "data": {
+    "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
+    "workspace_abs_path": "/data1/pjw/AgentPlatform/tmp/workspaces/9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
+    "tree": {
+      "name": "",
+      "type": "directory",
+      "relative_path": "",
+      "children": [
+        {
+          "name": "input",
+          "type": "directory",
+          "relative_path": "input",
+          "children": [
+            {
+              "name": "data.xlsx",
+              "type": "file",
+              "relative_path": "input/data.xlsx",
+              "size": 12045
+            }
+          ]
+        }
+      ]
+    },
+    "files": [
+      {
+        "name": "data.xlsx",
+        "relative_path": "input/data.xlsx",
+        "size": 12045,
+        "encoding": "base64",
+        "content": "UEsDBBQAAAAIAAA..."
+      }
+    ]
+  }
+}
+```
+- 常见错误：
+  - `400`：`session_id` 为空
+  - `404`：`session_id` 不存在
+  - `500`：会话查询失败、工作区路径缺失、或目录树构建失败
+- 实现逻辑：
+  1. 校验 `session_id` 非空并存在于 `session_user`。
+  2. 读取该会话 `workspace_abs_path`。
+  3. 递归扫描目录，返回目录与文件的层级关系（`tree`）。
+  4. 同时读取所有实际文件并返回内容（`files`；文本为 UTF-8 原文，二进制为 Base64）。
+  5. 若工作区目录不存在，返回空树与空文件列表。
+
+---
+
+### 3.9 流式分析任务（SSE）
 - 路径：`POST /run-analysis`
 - 处理函数：`build_run_analysis_response(body: StreamingTaskRequest)`
 - Content-Type：`application/json`
@@ -363,7 +438,29 @@ data: {"type":"report_chunk","content":"第一部分结论..."}
 
 ---
 
-### 3.9 健康检查
+### 3.10 断线恢复流（SSE）
+- 路径：`POST /run-analysis/reconnect`
+- 处理函数：`build_reconnect_analysis_response(session_id: str)`
+- Content-Type：`application/json`
+- 响应类型：`text/event-stream`
+- 请求体参数（JSON）：
+  - `session_id: str`（必填）
+- 流式返回语义：
+  1. 第一条固定返回 `type=snapshot`，包含 `content`（当前完整锁存内容）和 `version`（当前版本号）。
+  2. 若快照末尾已是终态事件（`streaming_ended/error/streaming_error`），连接立即结束。
+  3. 若分析尚未结束，后端继续轮询数据库并推送新增事件，直到终态事件再结束。
+- 成功返回示例（首条）：
+```text
+data: {"type":"snapshot","session_id":"...","content":"...","version":35,"timestamp":"2026-04-21 12:00:00"}
+```
+- 常见错误：
+  - `400`：`session_id` 为空
+  - `404`：`session_id` 不存在
+  - `500`：启动重连流失败
+
+---
+
+### 3.11 健康检查
 - 路径：`GET /health`
 - 处理函数：`build_health_response()`（`src/backend/route_services.py`）
 - 请求参数：无
@@ -463,7 +560,12 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
 curl "http://localhost:52716/session/snapshot?session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 ```
 
-### 5.8 发起流式分析
+### 5.8 查询会话工作区目录树
+```bash
+curl "http://localhost:52716/session/workspace-tree?session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
+```
+
+### 5.9 发起流式分析
 ```bash
 curl -N -X POST "http://localhost:52716/run-analysis" \
   -H "Content-Type: application/json" \
@@ -473,7 +575,7 @@ curl -N -X POST "http://localhost:52716/run-analysis" \
   }'
 ```
 
-### 5.9 健康检查
+### 5.10 健康检查
 ```bash
 curl http://localhost:52716/health
 ```

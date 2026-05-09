@@ -208,6 +208,7 @@ USER_PROMPT_PLANNER_ANALYZE_ZH = """请针对下列用户输入与工作区信�
 
 【工作区数据文件信息】（含相对路径、列、样本与 pandas.info 摘要）
 {file_info}
+{session_memory}
 
 请说明：任务类型或性质；用户要达成的核心目标；输入数据来自哪些文件、字段含义与格式；期望输出是什么（形态、粒度）；约束与未知项（写「未知」）。凡涉及路径与列名，仅使用上文工作区信息中的内容。
 """
@@ -218,6 +219,7 @@ USER_PROMPT_PLANNER_ANALYZE_EN = """Write **requirement analysis only** in clear
 
 【Workspace file information】 (relative paths, columns, samples, pandas.info summary)
 {file_info}
+{session_memory}
 
 Cover: task type; objective; inputs (which files, field meanings, format); expected outputs; constraints and unknowns. Use only paths and columns from the workspace section above.
 """
@@ -233,6 +235,7 @@ USER_PROMPT_PLANNER_DECOMPOSE_ZH = """下列「需求解析」已由上一步完
 
 【需求解析】
 {requirement_analysis}
+{session_memory}
 
 请输出若干阶段（如：数据读入与检查 → … → 汇总统计结果），每阶段一两句话说明要达成什么；不要写伪代码或具体库调用清单。
 请勿包含「由脚本输出最终分析报告/结论与建议正文」之类的阶段——文字结论由后续 Reporter 生成。
@@ -247,6 +250,7 @@ USER_PROMPT_PLANNER_DECOMPOSE_EN = """The following **requirement analysis** is 
 
 【Requirement analysis】
 {requirement_analysis}
+{session_memory}
 
 Output sequential phases (e.g. load/check → … → summarize metrics); one or two sentences per phase on intent—no pseudocode or explicit library enumeration.
 Do **not** include a phase that tells the script to print the final narrative report, conclusions, or recommendations—the Reporter stage writes that prose from execution logs.
@@ -311,6 +315,7 @@ USER_PROMPT_REPORTER_ZH = """请根据以下规划与执行结果，写一份简
 - 执行日志:
 {execution_logs}
 {error_section}
+{session_memory}
 
 文中请交代本次分析要解决的问题或目标依据、执行过程中的主要发现与现象，并在结尾给出结论与可操作建议；若存在错误或异常，也请自然融入叙述。
 """
@@ -325,6 +330,7 @@ Execution:
 - Logs:
 {execution_logs}
 {error_section}
+{session_memory}
 
 Explain what the analysis set out to do, what stood out during execution, and finish with conclusions and actionable recommendations. Work in errors or anomalies naturally if present.
 """

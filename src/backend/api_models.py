@@ -18,6 +18,10 @@ class StreamingTaskRequest(BaseModel):
     input_data: str
 
 
+class ReconnectStreamRequest(BaseModel):
+    session_id: str
+
+
 class CreateSessionRequest(BaseModel):
     user_id: int
 

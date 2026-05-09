@@ -30,8 +30,14 @@ from configs.config import (
     MAX_SUPERVISOR_INVOCATIONS,
     OPENAI_COMPATIBLE_API_BASE,
 )
+from db.session_store import SessionStore
 from utils.workspace_manager import list_workspace_files, resolve_workspace_root
 from utils.model_logger import log_phase_end, log_phase_start
+from utils.session_memory import (
+    format_memory_for_prompt,
+    persist_from_pipeline_state,
+    read_session_memory_for_prompt,
+)
 from worker.workspace_worker import run_workspace_tasks
 
 logger = logging.getLogger(__name__)
@@ -39,6 +45,27 @@ logger = logging.getLogger(__name__)
 # 用于通知流式消费者“图执行已结束”的哨兵对象。
 # 之所以不用 None，是为了避免和真实事件 payload（可能为 None）混淆。
 _GRAPH_STREAM_END = object()
+
+
+def _persist_pipeline_event(session_id: str, payload: Dict[str, Any]) -> None:
+    """将编排事件增量持久化到会话内容，避免依赖 SSE 连接状态。"""
+    try:
+        SessionStore.append_content(
+            session_id,
+            json.dumps(payload, ensure_ascii=False) + "\n",
+        )
+    except Exception:
+        logger.exception("persist pipeline event failed: session_id=%s", session_id)
+
+
+async def _emit_pipeline_event(
+    session_id: str,
+    q: asyncio.Queue[Any],
+    payload: Dict[str, Any],
+) -> None:
+    """事件先入库，再进入流式队列。"""
+    _persist_pipeline_event(session_id, payload)
+    await q.put(payload)
 
 
 def _should_try_json_schema_method(llm: ChatOpenAI) -> bool:
@@ -118,6 +145,9 @@ class PipelineState(TypedDict, total=False):
     force_reporter: bool
     next_route: str
     last_supervisor_reason: str
+    # 会话记忆（SESSION_MEMORY.md）：编排轨迹与最近一次 Coder 模式
+    memory_trace: List[Dict[str, Any]]
+    last_coder_mode: str
 
 
 class SupervisorDecision(BaseModel):
@@ -474,6 +504,7 @@ async def _supervisor_node(state: PipelineState) -> Dict[str, Any]:
     if force_rep and next_route == "reporter":
         pass
 
+    mem_hint = format_memory_for_prompt(read_session_memory_for_prompt(session_id), lang).strip()
     orch = {
         "type": "orchestrator",
         "data": {
@@ -482,9 +513,10 @@ async def _supervisor_node(state: PipelineState) -> Dict[str, Any]:
             "feedback": feedback,
             "supervisor_invoke": n,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            **({"session_memory": mem_hint} if mem_hint else {}),
         },
     }
-    await q.put(orch)
+    await _emit_pipeline_event(session_id, q, orch)
 
     log_phase_end(
         session_id,
@@ -498,13 +530,36 @@ async def _supervisor_node(state: PipelineState) -> Dict[str, Any]:
         },
     )
 
-    return {
+    prev_trace = list(state.get("memory_trace") or [])
+    new_trace = (
+        prev_trace
+        + [
+            {
+                "next": next_route,
+                "reason": reason,
+                "feedback": (feedback or "")[:800],
+                "invoke": n,
+            }
+        ]
+    )[-8:]
+    sup_out = {
         "supervisor_invoke_count": n,
         "next_route": next_route,
         "last_supervisor_reason": reason,
         "supervisor_feedback": feedback,
         "force_reporter": force_rep and not state.get("reporter_done"),
+        "memory_trace": new_trace,
     }
+    try:
+        persist_from_pipeline_state(
+            {**state, **sup_out},
+            last_event="supervisor",
+            streaming_status="running",
+            pipeline_note="本轮分析进行中：Supervisor 已决策下一步。",
+        )
+    except Exception:
+        logger.exception("session memory persist after supervisor failed")
+    return sup_out
 
 
 async def _planner_node(state: PipelineState) -> Dict[str, Any]:
@@ -531,7 +586,7 @@ async def _planner_node(state: PipelineState) -> Dict[str, Any]:
     async with AgentPlanner() as planner:
         planner.lang = lang
         async for event in planner.run_flow_with_workspace(session_id, input_req):
-            await q.put({"type": "planner", "data": event})
+            await _emit_pipeline_event(session_id, q, {"type": "planner", "data": event})
             if event.get("type") == "stage_result" and event.get("data"):
                 plan_data = event["data"]
 
@@ -546,7 +601,7 @@ async def _planner_node(state: PipelineState) -> Dict[str, Any]:
                 "planner_summary_len": 0,
             },
         )
-        return {
+        bad = {
             "plan_data": plan_data,
             "planner_summary": "",
             "requirement_analysis": "",
@@ -557,6 +612,16 @@ async def _planner_node(state: PipelineState) -> Dict[str, Any]:
             # 新规划后丢弃旧执行结果，避免 coder 误判需 correct
             "worker_results": None,
         }
+        try:
+            persist_from_pipeline_state(
+                {**state, **bad},
+                last_event="planner",
+                streaming_status="running",
+                pipeline_note="Planner 已运行；当前规划尚未通过校验。",
+            )
+        except Exception:
+            logger.exception("session memory persist after planner (invalid) failed")
+        return bad
 
     assert plan_data is not None
     ra = (plan_data.get("需求解析") or "").strip()
@@ -573,7 +638,7 @@ async def _planner_node(state: PipelineState) -> Dict[str, Any]:
             "steps_outline_len": len(so),
         },
     )
-    return {
+    good = {
         "plan_data": plan_data,
         "planner_summary": ps,
         "requirement_analysis": ra,
@@ -584,6 +649,16 @@ async def _planner_node(state: PipelineState) -> Dict[str, Any]:
         "planner_run_count": int(state.get("planner_run_count") or 0) + 1,
         "worker_results": None,
     }
+    try:
+        persist_from_pipeline_state(
+            {**state, **good},
+            last_event="planner",
+            streaming_status="running",
+            pipeline_note="Planner 已产出有效规划；工作区上下文已刷新。",
+        )
+    except Exception:
+        logger.exception("session memory persist after planner (valid) failed")
+    return good
 
 
 async def _coder_node(state: PipelineState) -> Dict[str, Any]:
@@ -620,6 +695,8 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
         },
     )
 
+    mem_ex = read_session_memory_for_prompt(session_id)
+
     if use_correct:
         # 修复路径：把错误摘要喂给 Coder，定点修补目标文件。
         one = correct_and_write_code(
@@ -628,6 +705,7 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
             err_text,
             lang=lang,
             workspace_context=ws,
+            session_memory_excerpt=mem_ex,
         )
         results = [one]
         corr = int(state.get("correction_attempts") or 0) + 1
@@ -653,10 +731,11 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
             code_specs,
             lang=lang,
             workspace_context=ws,
+            session_memory_excerpt=mem_ex,
         )
         corr = int(state.get("correction_attempts") or 0)
 
-    await q.put({"type": "coder", "data": results})
+    await _emit_pipeline_event(session_id, q, {"type": "coder", "data": results})
     log_phase_end(
         session_id,
         "coder",
@@ -674,14 +753,26 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
             "correction_attempts_after": corr,
         },
     )
-    return {
+    mode_label = "correct" if use_correct else "generate"
+    cod_out = {
         "coder_results": results,
         "workspace_context": ws,
         "code_file_paths": paths,
         "correction_attempts": corr,
         "last_completed_stage": "coder",
         "supervisor_feedback": "",
+        "last_coder_mode": mode_label,
     }
+    try:
+        persist_from_pipeline_state(
+            {**state, **cod_out},
+            last_event="coder",
+            streaming_status="running",
+            pipeline_note="Coder 已完成写入或修正；详见代码与修正章节。",
+        )
+    except Exception:
+        logger.exception("session memory persist after coder failed")
+    return cod_out
 
 
 async def _worker_node(state: PipelineState) -> Dict[str, Any]:
@@ -698,7 +789,7 @@ async def _worker_node(state: PipelineState) -> Dict[str, Any]:
     # run_workspace_tasks 为同步函数，这里直接调用即可；
     # 若后续执行耗时显著，可考虑迁移到线程池。
     results = run_workspace_tasks(session_id, mode, paths)
-    await q.put({"type": "worker", "data": results})
+    await _emit_pipeline_event(session_id, q, {"type": "worker", "data": results})
     log_phase_end(
         session_id,
         "worker",
@@ -707,11 +798,21 @@ async def _worker_node(state: PipelineState) -> Dict[str, Any]:
             "error_messages_count": len(results.get("error_messages") or []),
         },
     )
-    return {
+    wr_out = {
         "worker_results": results,
         "last_completed_stage": "worker",
         "supervisor_feedback": "",
     }
+    try:
+        persist_from_pipeline_state(
+            {**state, **wr_out},
+            last_event="worker",
+            streaming_status="running",
+            pipeline_note="Worker 已执行；错误与 stdout 摘要见记忆文件。",
+        )
+    except Exception:
+        logger.exception("session memory persist after worker failed")
+    return wr_out
 
 
 async def _reporter_node(state: PipelineState) -> Dict[str, Any]:
@@ -736,19 +837,34 @@ async def _reporter_node(state: PipelineState) -> Dict[str, Any]:
             "fallback_worker": state.get("worker_results") is None,
         },
     )
+    report_parts: List[str] = []
     async for chunk in stream_report(
         summary,
         wr,
         lang=lang,
         session_id=session_id,
     ):
-        await q.put({"type": "report_chunk", "content": chunk})
+        if chunk:
+            report_parts.append(chunk)
+        await _emit_pipeline_event(session_id, q, {"type": "report_chunk", "content": chunk})
     log_phase_end(session_id, "reporter", {"stream_finished": True})
-    return {
+    report_excerpt = ("".join(report_parts))[:3000]
+    rep_out = {
         "reporter_done": True,
         "last_completed_stage": "reporter",
         "supervisor_feedback": "",
     }
+    try:
+        persist_from_pipeline_state(
+            {**state, **rep_out},
+            report_excerpt=report_excerpt,
+            last_event="reporter",
+            streaming_status="running",
+            pipeline_note="Reporter 已流式完成；报告摘录已写入记忆。",
+        )
+    except Exception:
+        logger.exception("session memory persist after reporter failed")
+    return rep_out
 
 
 def _route_from_supervisor(state: PipelineState) -> str:
@@ -826,6 +942,8 @@ async def run_orchestrated_analysis_stream(
         "force_reporter": False,
         "coder_results": [],
         "workspace_context": {},
+        "memory_trace": [],
+        "last_coder_mode": "",
     }
 
     log_phase_start(
@@ -840,6 +958,18 @@ async def run_orchestrated_analysis_stream(
         terminal_event: Optional[Dict[str, Any]] = None
         final_state: Optional[Dict[str, Any]] = None
         try:
+            try:
+                persist_from_pipeline_state(
+                    {
+                        **initial,
+                        "workspace_context": _build_workspace_context(session_id),
+                    },
+                    last_event="pipeline_start",
+                    streaming_status="running",
+                    pipeline_note="本轮分析任务已启动；以下为启动时工作区快照。",
+                )
+            except Exception:
+                logger.exception("session memory persist at pipeline_start failed")
             # 实际图执行在后台任务中进行；前台通过队列持续消费事件。
             final_state = await graph.ainvoke(initial)
             if final_state and not final_state.get("reporter_done"):
@@ -856,6 +986,24 @@ async def run_orchestrated_analysis_stream(
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
         finally:
+            try:
+                merged = {**initial, **(final_state or {})}
+                if terminal_event is None:
+                    persist_from_pipeline_state(
+                        merged,
+                        streaming_status="completed",
+                        last_event="pipeline_finished",
+                        pipeline_note="本轮流水线已结束（正常路径）。",
+                    )
+                else:
+                    persist_from_pipeline_state(
+                        merged,
+                        streaming_status="error_or_incomplete",
+                        last_event="pipeline_finished",
+                        pipeline_note="流水线已结束（异常、中断或未走到 Reporter）。",
+                    )
+            except Exception:
+                logger.exception("session memory persist at pipeline terminal failed")
             log_phase_end(
                 session_id,
                 "orchestrated_pipeline",
@@ -866,7 +1014,17 @@ async def run_orchestrated_analysis_stream(
             )
             # 终态事件与普通阶段事件统一走队列转发，避免依赖函数尾部二次 yield。
             if terminal_event is not None:
-                await q.put(terminal_event)
+                await _emit_pipeline_event(session_id, q, terminal_event)
+            else:
+                await _emit_pipeline_event(
+                    session_id,
+                    q,
+                    {
+                        "type": "streaming_ended",
+                        "message": "分析任务流式输出结束",
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    },
+                )
             await q.put(_GRAPH_STREAM_END)
 
     token = _pipeline_event_queue.set(q)
@@ -882,11 +1040,7 @@ async def run_orchestrated_analysis_stream(
                 yield item
             await task
         except asyncio.CancelledError:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            raise
+            # SSE 断连时，不取消后台分析任务；让其继续执行并持续落库。
+            return
     finally:
         _pipeline_event_queue.reset(token)
