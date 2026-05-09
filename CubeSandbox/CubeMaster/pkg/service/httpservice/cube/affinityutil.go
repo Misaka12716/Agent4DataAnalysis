@@ -1,0 +1,141 @@
+// Copyright (c) 2024 Tencent Inc.
+// SPDX-License-Identifier: Apache-2.0
+//
+
+package cube
+
+import (
+	"context"
+	"strings"
+
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/config"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/constants"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/log"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/utils"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/scheduler/affinity"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/service/sandbox/types"
+	"k8s.io/apimachinery/pkg/api/resource"
+)
+
+func runInsReq2Affinity(ctx context.Context, req *types.CreateCubeSandboxReq) context.Context {
+	matchExpressionsWithANDed := constructNodeAffinity(ctx, req)
+
+	var nodeSelectorTerms []affinity.NodeSelectorTerm
+	if len(matchExpressionsWithANDed) > 0 {
+		nodeSelectorTerms = append(nodeSelectorTerms, affinity.NodeSelectorTerm{MatchExpressions: matchExpressionsWithANDed})
+	}
+
+	if len(nodeSelectorTerms) > 0 {
+		ns, err := affinity.NewNodeSelector(nodeSelectorTerms)
+		if err != nil {
+			log.G(ctx).Fatalf("runInsReq2Affinity NewNodeSelector fail:%s", err)
+			return ctx
+		}
+		ctx = constants.WithNodeSelector(ctx, ns)
+
+		if _, ok := req.Annotations[constants.AnnotationsNodeAffinityInstanceType]; !ok {
+			ctx = constants.WithBackoffNodeSelector(ctx, ns)
+		}
+	}
+	return ctx
+}
+
+func constructNodeAffinity(ctx context.Context, req *types.CreateCubeSandboxReq) []affinity.NodeSelectorRequirement {
+	var matchExpressions []affinity.NodeSelectorRequirement
+
+	nodeClusterLabel := map[string]any{}
+
+	if scf := config.GetConfig().Scheduler; scf != nil {
+		if af := scf.GetAffinityConf(req.InstanceType); af.Enable && len(af.ClusterLabels) > 0 {
+			nodeClusterLabel = af.ClusterLabels
+		}
+	}
+
+	if scf := config.GetConfig().Scheduler; scf != nil {
+		if af := scf.GetLargeSizeAffinityConf(req.InstanceType); af.Enable {
+			var tmpMatchExpressions []affinity.NodeSelectorRequirement
+			if isLargeMemSize(ctx, req, af.MemoryLowerWaterMark) {
+				tmpMatchExpressions = append(tmpMatchExpressions, affinity.NodeSelectorRequirement{
+					Key:      constants.AffinityKeyMemorySize,
+					Operator: affinity.NodeSelectorOperator(af.Operator),
+					Values:   map[string]any{af.MemoryLowerWaterMark: struct{}{}},
+				})
+			}
+			if isLargeCpucores(ctx, req, af.CpuLowerWaterMark) {
+				tmpMatchExpressions = append(tmpMatchExpressions, affinity.NodeSelectorRequirement{
+					Key:      constants.AffinityKeyCPUCores,
+					Operator: affinity.NodeSelectorOperator(af.Operator),
+					Values:   map[string]any{af.CpuLowerWaterMark: struct{}{}},
+				})
+			}
+
+			if len(tmpMatchExpressions) > 0 {
+				matchExpressions = append(matchExpressions, tmpMatchExpressions...)
+				if len(af.ClusterLabels) > 0 {
+					nodeClusterLabel = af.ClusterLabels
+				}
+			}
+		}
+	}
+
+	if req.Annotations != nil {
+		if clusterIDs, ok := req.Annotations[constants.AnnotationsNodeAffinityClusterLabel]; ok && clusterIDs != "" {
+			nodeClusterLabel = utils.SliceToMap(strings.Split(clusterIDs, ":"))
+		}
+	}
+
+	if len(nodeClusterLabel) > 0 {
+		requiredV := affinity.NodeSelectorRequirement{
+			Key:      constants.AffinityKeyClusterID,
+			Operator: affinity.NodeSelectorOpIn,
+			Values:   nodeClusterLabel,
+		}
+		matchExpressions = append(matchExpressions, requiredV)
+	}
+
+	if req.Annotations != nil {
+		if instanceTypes, ok := req.Annotations[constants.AnnotationsNodeAffinityInstanceType]; ok && instanceTypes != "" {
+			requiredV := affinity.NodeSelectorRequirement{
+				Key:      constants.AffinityKeyInstanceType,
+				Operator: affinity.NodeSelectorOpIn,
+				Values:   utils.SliceToMap(strings.Split(instanceTypes, ":")),
+			}
+			matchExpressions = append(matchExpressions, requiredV)
+		}
+	}
+
+	log.G(ctx).Debugf("constructNodeAffinity:%s", utils.InterfaceToString(matchExpressions))
+	return matchExpressions
+}
+
+func isLargeMemSize(ctx context.Context, req *types.CreateCubeSandboxReq, largeMemSize string) bool {
+	if largeMemSize == "" {
+		return false
+	}
+	reqMem, _ := resource.ParseQuantity("0")
+	for _, ctr := range req.Containers {
+		ctnmemQuantity, err := resource.ParseQuantity(ctr.Resources.Mem)
+		if err != nil {
+			log.G(ctx).Errorf("parse container %s mem limit: %s", ctr.Name, err.Error())
+			return false
+		}
+		reqMem.Add(ctnmemQuantity)
+	}
+	return reqMem.Cmp(resource.MustParse(largeMemSize)) >= 0
+}
+
+func isLargeCpucores(ctx context.Context, req *types.CreateCubeSandboxReq, largeCpucores string) bool {
+	if largeCpucores == "" {
+		return false
+	}
+	reqCpu, _ := resource.ParseQuantity("0")
+	for _, ctr := range req.Containers {
+		ctncpuQuantity, err := resource.ParseQuantity(ctr.Resources.Cpu)
+		if err != nil {
+			log.G(ctx).Errorf("parse container %q cpu limit: %w", ctr.Name, err)
+			return false
+		}
+		reqCpu.Add(ctncpuQuantity)
+	}
+	return reqCpu.Cmp(resource.MustParse(largeCpucores)) >= 0
+}

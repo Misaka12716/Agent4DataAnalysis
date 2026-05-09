@@ -1,0 +1,160 @@
+// Copyright (c) 2024 Tencent Inc.
+// SPDX-License-Identifier: Apache-2.0
+//
+
+package templatecenter
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/agiledragon/gomonkey/v2"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/node"
+	sandboxtypes "github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/service/sandbox/types"
+	"gorm.io/gorm"
+)
+
+func TestResolveTemplateNodesFiltersRequestedHealthyNodes(t *testing.T) {
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+
+	patches.ApplyFunc(healthyTemplateNodes, func(instanceType string) []*node.Node {
+		return []*node.Node{
+			{InsID: "node-a", IP: "10.0.0.1", Healthy: true},
+			{InsID: "node-b", IP: "10.0.0.2", Healthy: true},
+		}
+	})
+
+	got, err := resolveTemplateNodes("cubebox", []string{"10.0.0.2", "node-a"})
+	if err != nil {
+		t.Fatalf("resolveTemplateNodes returned error: %v", err)
+	}
+	want := []string{"node-a", "node-b"}
+	gotIDs := make([]string, 0, len(got))
+	for _, item := range got {
+		gotIDs = append(gotIDs, item.ID())
+	}
+	if !reflect.DeepEqual(gotIDs, want) {
+		t.Fatalf("selected nodes=%v, want %v", gotIDs, want)
+	}
+}
+
+func TestResolveTemplateNodesRejectsMissingTargets(t *testing.T) {
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+
+	patches.ApplyFunc(healthyTemplateNodes, func(instanceType string) []*node.Node {
+		return []*node.Node{
+			{InsID: "node-a", IP: "10.0.0.1", Healthy: true},
+		}
+	})
+
+	_, err := resolveTemplateNodes("cubebox", []string{"node-b"})
+	if err == nil {
+		t.Fatal("expected resolveTemplateNodes to reject missing targets")
+	}
+	if !strings.Contains(err.Error(), "node-b") {
+		t.Fatalf("expected error to mention missing node, got %v", err)
+	}
+}
+
+func TestCreateTemplateUsesRequestedDistributionScope(t *testing.T) {
+	origDB := store.db
+	store.db = &gorm.DB{}
+	defer func() {
+		store.db = origDB
+	}()
+
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+
+	req := &sandboxtypes.CreateCubeSandboxReq{
+		Request:           &sandboxtypes.Request{RequestID: "req-1"},
+		InstanceType:      "cubebox",
+		DistributionScope: []string{"node-a"},
+		Annotations: map[string]string{
+			"cube.master.appsnapshot.template.id":      "tpl-scope",
+			"cube.master.appsnapshot.template.version": "v2",
+		},
+	}
+
+	patches.ApplyFunc(NormalizeRequest, func(in *sandboxtypes.CreateCubeSandboxReq) (*sandboxtypes.CreateCubeSandboxReq, string, error) {
+		return in, "tpl-scope", nil
+	})
+	patches.ApplyFunc(normalizeStoredTemplateRequest, func(in *sandboxtypes.CreateCubeSandboxReq) (*sandboxtypes.CreateCubeSandboxReq, error) {
+		return in, nil
+	})
+	patches.ApplyFunc(createDefinition, func(ctx context.Context, templateID string, storedReq *sandboxtypes.CreateCubeSandboxReq, instanceType, version string) error {
+		return nil
+	})
+	patches.ApplyFunc(setTemplateRequestCache, func(templateID string, req *sandboxtypes.CreateCubeSandboxReq) error {
+		return nil
+	})
+
+	var gotScope []string
+	patches.ApplyFunc(resolveTemplateNodes, func(instanceType string, scope []string) ([]*node.Node, error) {
+		gotScope = append([]string(nil), scope...)
+		return []*node.Node{{InsID: "node-a", IP: "10.0.0.1", Healthy: true}}, nil
+	})
+	patches.ApplyFunc(createTemplateReplicasOnNodes, func(ctx context.Context, templateID string, req *sandboxtypes.CreateCubeSandboxReq, targets []*node.Node, opts replicaRunOptions) ([]ReplicaStatus, error) {
+		if len(targets) != 1 || targets[0].ID() != "node-a" {
+			return nil, errors.New("unexpected target nodes")
+		}
+		return []ReplicaStatus{{NodeID: "node-a", NodeIP: "10.0.0.1", InstanceType: req.InstanceType, Status: ReplicaStatusReady}}, nil
+	})
+	patches.ApplyFunc(finalizeTemplateReplicas, func(ctx context.Context, templateID, instanceType, version string, replicas []ReplicaStatus) (*TemplateInfo, error) {
+		return &TemplateInfo{TemplateID: templateID, InstanceType: instanceType, Version: version, Replicas: replicas}, nil
+	})
+	patches.ApplyFunc(cleanupTemplateReplicas, func(ctx context.Context, templateID string) error {
+		return nil
+	})
+	patches.ApplyFunc(cleanupTemplateMetadata, func(ctx context.Context, templateID string) error {
+		return nil
+	})
+
+	info, err := CreateTemplate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateTemplate returned error: %v", err)
+	}
+	if info == nil || info.TemplateID != "tpl-scope" {
+		t.Fatalf("unexpected template info: %#v", info)
+	}
+	if !reflect.DeepEqual(gotScope, []string{"node-a"}) {
+		t.Fatalf("resolveTemplateNodes scope=%v, want [node-a]", gotScope)
+	}
+}
+
+func TestGetTemplateRequestAssignsRuntimeRequestID(t *testing.T) {
+	templateID := "tpl-runtime-request"
+	invalidateTemplateCaches(templateID)
+	defer invalidateTemplateCaches(templateID)
+
+	if err := setTemplateRequestCache(templateID, &sandboxtypes.CreateCubeSandboxReq{}); err != nil {
+		t.Fatalf("setTemplateRequestCache returned error: %v", err)
+	}
+
+	first, err := GetTemplateRequest(context.Background(), templateID)
+	if err != nil {
+		t.Fatalf("GetTemplateRequest returned error: %v", err)
+	}
+	if first.Request == nil {
+		t.Fatal("expected runtime request to be hydrated")
+	}
+	if strings.TrimSpace(first.RequestID) == "" {
+		t.Fatal("expected runtime requestID to be populated")
+	}
+
+	second, err := GetTemplateRequest(context.Background(), templateID)
+	if err != nil {
+		t.Fatalf("GetTemplateRequest second call returned error: %v", err)
+	}
+	if second.Request == nil || strings.TrimSpace(second.RequestID) == "" {
+		t.Fatal("expected runtime requestID on subsequent fetch")
+	}
+	if first.RequestID == second.RequestID {
+		t.Fatalf("expected a fresh runtime requestID per fetch, got duplicate %q", first.RequestID)
+	}
+}

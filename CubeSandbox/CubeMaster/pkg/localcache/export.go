@@ -1,0 +1,458 @@
+// Copyright (c) 2024 Tencent Inc.
+// SPDX-License-Identifier: Apache-2.0
+//
+
+// Package localcache provides local cache
+package localcache
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"sync/atomic"
+	"time"
+
+	"github.com/gomodule/redigo/redis"
+	"github.com/patrickmn/go-cache"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/config"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/constants"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/db"
+	fwk "github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/framework"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/log"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/node"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/types"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/utils"
+	"github.com/tencentcloud/CubeSandbox/CubeMaster/pkg/base/wrapredis"
+	"github.com/tencentcloud/CubeSandbox/cubelog"
+)
+
+type EventType string
+
+const (
+	ADD    EventType = "add"
+	DEL    EventType = "del"
+	UPDATE EventType = "update"
+	DOWN   EventType = "down"
+)
+
+type Event struct {
+	Type   EventType
+	InsIDs []string
+}
+
+var externalNodeLoader func(context.Context) ([]*node.Node, error)
+
+func RegisterNodeLoader(loader func(context.Context) ([]*node.Node, error)) {
+	externalNodeLoader = loader
+}
+
+func Init(ctx context.Context) error {
+	start := time.Now()
+	l.event = make(chan *Event, 1000)
+	l.cache = cache.New(0, 0)
+	l.imageCache = cache.New(0, 0)
+	l.templateNodeCache = cache.New(0, 0)
+	l.db = db.Init(config.GetDbConfig())
+	l.dbAddr = config.GetConfig().OssDBConfig.Addr
+	l.totalSelfNodes = config.GetConfig().Common.DefaultHeadlessServiceNodesNum
+	l.sortedNodesByClusters = make(map[string]node.NodeList)
+	l.sortedNodesByClusters[constants.DefaultInstanceTypeName] = node.NodeList{}
+	for _, k := range config.GetSchedulerInstanceTypeConfs() {
+		l.sortedNodesByClusters[k] = node.NodeList{}
+	}
+
+	if err := l.loadAllFromDB(); err != nil {
+		return fmt.Errorf("loadAllFromDB:%v", err)
+	}
+
+	if err := l.loadMetricFromRedis(); err != nil {
+		CubeLog.WithContext(context.Background()).Errorf("loadMetricFromRedis:%v", err)
+	}
+
+	l.loopSelfNodes(ctx)
+
+	go l.loop(ctx)
+	go l.dealEvent(ctx)
+
+	go l.loopUpdateMetric(ctx)
+	CubeLog.WithContext(context.Background()).Debugf("init_all,cost:%v,:%v", time.Since(start), GetNodes(-1).String())
+
+	go l.cleanSandboxCache(ctx)
+	return nil
+}
+
+func GetCacheItems() map[string]cache.Item {
+	return l.cache.Items()
+}
+
+func GetNodes(n int) node.NodeList {
+	nodes := node.NodeList{}
+	elems := l.cache.Items()
+	for _, v := range elems {
+		h, ok := v.Object.(*node.Node)
+		if ok {
+			nodes.Append(h)
+		}
+		if n > 0 && nodes.Len() >= n {
+			break
+		}
+	}
+	return nodes
+}
+
+func GetHealthyNodes(n int) node.NodeList {
+	nodes := node.NodeList{}
+	elems := l.cache.Items()
+	for _, v := range elems {
+		if n >= 0 && nodes.Len() >= n {
+			break
+		}
+		h, ok := v.Object.(*node.Node)
+		if ok && h.Healthy {
+			nodes.Append(h)
+		}
+
+	}
+	return nodes
+}
+
+func GetHealthyNodesByInstanceType(n int, product string) node.NodeList {
+
+	l.lockSortedNodes.RLock()
+	clusterNodes, exists := l.sortedNodesByClusters[product]
+	l.lockSortedNodes.RUnlock()
+	if !exists {
+
+		return GetHealthyNodes(n)
+	}
+
+	if n == -1 {
+		return clusterNodes
+	}
+
+	nodes := node.NodeList{}
+
+	for _, v := range clusterNodes {
+
+		if n >= 0 && nodes.Len() >= n {
+			break
+		}
+
+		if v.Healthy {
+			nodes.Append(v)
+		}
+	}
+
+	return nodes
+}
+
+func GetNode(id string) (*node.Node, bool) {
+	elem, exist := l.cache.Get(id)
+	if !exist {
+		return nil, exist
+	}
+	h, ok := elem.(*node.Node)
+	return h, ok
+}
+
+func GetNodesByIp(ip string) (*node.Node, bool) {
+	elems := l.cache.Items()
+	for _, v := range elems {
+		h, ok := v.Object.(*node.Node)
+		if ok && h.IP == ip {
+			return h, true
+		}
+	}
+	return nil, false
+}
+
+func UpsertNode(n *node.Node) {
+	if n == nil {
+		return
+	}
+	if err := l.updateNodeFromMetaData(n); err != nil {
+		l.addNodeCache(n)
+	}
+}
+
+func NotifyEvent(e *Event) error {
+	select {
+	case l.event <- e:
+		return nil
+	default:
+		return errors.New("event full")
+	}
+}
+
+func SetSandboxProxyMap(ctx context.Context, proxyInfo *types.SandboxProxyMap) error {
+	keyByPass := "bypass_host_proxy" + ":" + proxyInfo.SandboxID
+	err := l.setByPassProsyToRedis(ctx, keyByPass, proxyInfo)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func GetSandboxProxyMap(ctx context.Context, sandboxID string) (*types.SandboxProxyMap, bool) {
+
+	keyByPass := "bypass_host_proxy" + ":" + sandboxID
+	proxyMap, err := l.getByPassProsyFromRedis(ctx, keyByPass)
+	if err != nil {
+		return nil, false
+	}
+
+	if proxyMap != nil {
+		return proxyMap, true
+	} else {
+		return nil, false
+	}
+}
+
+func GetInstanceInfoMap(ctx context.Context, insID string) (*types.InstanceInfoMap, bool) {
+	keyByIns := "cube_instance_info" + ":" + insID
+	proxyMap, err := l.getInsInfoFromRedis(ctx, keyByIns)
+	if err != nil {
+		return nil, false
+	}
+
+	if proxyMap != nil {
+		return proxyMap, true
+	}
+	return nil, false
+}
+
+func SetInstanceInfoMap(ctx context.Context, insInfo *types.InstanceInfoMap) error {
+	keyByIns := "cube_instance_info" + ":" + insInfo.InsID
+	err := l.setInstanceInfoMapToRedis(ctx, keyByIns, insInfo)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func SetInstanceInfoField(ctx context.Context, insID string, kv ...string) error {
+	keyByIns := "cube_instance_info" + ":" + insID
+	fieldValues := []interface{}{}
+	for i := 0; i < len(kv); i += 2 {
+		fieldValues = append(fieldValues, kv[i], kv[i+1])
+	}
+	_, err := wrapredis.GetRedis(wrapredis.RedisWrite).Do("HSET", redis.Args{keyByIns}.AddFlat(fieldValues)...)
+	if err != nil {
+		log.G(ctx).Errorf("redis set error, key: %s, err: %s", keyByIns, err)
+		return err
+	}
+	if log.IsDebug() {
+		log.G(ctx).Debugf("SetInstanceInfoField:%s,%s", insID, utils.InterfaceToString(fieldValues))
+	}
+	return nil
+}
+
+func DeleteInstanceInfoMap(ctx context.Context, insID string) error {
+	keyByIns := "cube_instance_info" + ":" + insID
+	err := l.deleteKeyFromRedis(ctx, keyByIns)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func DeleteSandboxProxyMap(ctx context.Context, sandboxID string) error {
+	keyByPass := "bypass_host_proxy" + ":" + sandboxID
+	err := l.deleteKeyFromRedis(ctx, keyByPass)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func SetDescribeTask(ctx context.Context, taskInfo *types.DescribeTaskMap) error {
+	key := "describetask" + ":" + taskInfo.TaskID
+	err := l.setDescribeTaskToRedis(ctx, key, taskInfo)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func GetDescribeTask(ctx context.Context, taskID string) (*types.DescribeTaskMap, bool) {
+	key := "describetask" + ":" + taskID
+	taskInfo, err := l.getDescribeTaskFromRedis(ctx, key)
+	if err != nil {
+		return nil, false
+	}
+
+	if taskInfo != nil {
+		return taskInfo, true
+	} else {
+		return nil, false
+	}
+}
+
+func RangeDBHost(index, size int, product string) ([]*node.Node, int) {
+	l.lockSortedNodes.RLock()
+	defer l.lockSortedNodes.RUnlock()
+	clusterNodes, exists := l.sortedNodesByClusters[product]
+	if !exists {
+
+		clusterNodes = l.sortedNodesByClusters[constants.DefaultInstanceTypeName]
+	}
+	if clusterNodes == nil {
+		return nil, 0
+	}
+	return clusterNodes.IndexByPage(index, size)
+}
+
+func MaxMvmLimit(n *node.Node) (num int64) {
+	defer func() {
+		if num == 0 {
+			num = 3000
+		}
+	}()
+	if n == nil {
+		num = config.GetConfig().Scheduler.NodeMaxMvmNum
+		return
+	}
+	num = n.MaxMvmLimit
+	confNum := config.GetConfig().Scheduler.GetNodeMaxMvmNumConf(n.InstanceType).MvmNum
+	if num <= 0 {
+
+		num = confNum
+	}
+
+	return num
+}
+
+func RealMaxMvmLimit(n *node.Node) (num int64) {
+	if n == nil {
+		num = 0
+		return
+	}
+	percent := config.GetConfig().Scheduler.GetNodeMaxMvmNumConf(n.InstanceType).MvmNumReserveNumPercent
+	maxnum := MaxMvmLimit(n)
+
+	return int64(math.Ceil(float64(maxnum) * percent))
+}
+
+func CreateConcurrentLimit(n *node.Node) (num int64) {
+	defer func() {
+		if num == 0 {
+			num = 50
+		}
+	}()
+	if n == nil {
+		num = config.GetConfig().CubeletConf.CreateConcurrentLimit
+		return
+	}
+	num = n.CreateConcurrentNum
+	if num <= config.GetConfig().CubeletConf.CreateConcurrentLimit {
+		num = config.GetConfig().CubeletConf.CreateConcurrentLimit
+	}
+
+	return num
+}
+
+func RealTimeCreateConcurrentLimit(n *node.Node) (num int64) {
+	if n == nil {
+		return 0
+	}
+	return n.RealTimeCreateNum
+}
+
+func LocalCreateConcurrentLimit(n *node.Node) (num int64) {
+	if n == nil {
+		return 0
+	}
+	return atomic.LoadInt64(&n.LocalCreateNum)
+}
+
+func IncrNodeConcurrent(n *node.Node) error {
+	if n == nil {
+		return nil
+	}
+	n.LocalCreateNumIncrBy(1)
+	return nil
+}
+
+func DecrNodeConcurrent(n *node.Node) error {
+	if n == nil {
+		return nil
+	}
+	n.LocalCreateNumIncrBy(-1)
+	return nil
+}
+
+func HealthyMasterNodes() (num int64) {
+	defer func() {
+		if num == 0 {
+			num = 1
+		}
+	}()
+	return atomic.LoadInt64(&l.totalSelfNodes)
+}
+
+func GetImageStateByNode(imageName string, nodeName string) *fwk.ImageStateSummary {
+	state := l.getImageCache(imageName)
+	if state == nil {
+		return nil
+	}
+	if state.HasNode(nodeName) {
+		return state
+	}
+	return nil
+}
+
+func RegisterTemplateReplica(templateID, nodeID string, sizeBytes int64) {
+	registerTemplateReplica(templateID, nodeID, sizeBytes, true)
+}
+
+func registerTemplateReplica(templateID, nodeID string, sizeBytes int64, syncNodeTemplates bool) {
+	if templateID == "" || nodeID == "" {
+		return
+	}
+	state := l.getImageCache(templateID)
+	if state == nil {
+		ossClusterLabel := ""
+		if n, ok := GetNode(nodeID); ok && n != nil {
+			ossClusterLabel = n.OssClusterLabel
+		}
+		state = fwk.NewImageStateSummary(sizeBytes, ossClusterLabel, nodeID)
+		l.addImageCache(templateID, state)
+	} else {
+		if sizeBytes > 0 {
+			state.Size = sizeBytes
+		}
+		state.AddNode(nodeID)
+		state.UpdateAt = time.Now()
+	}
+	if state.OssClusterLabel != "" {
+		state.ScaledImageScore = scaledImageScore(state, GetHealthyNodesByInstanceType(-1, state.OssClusterLabel).Len())
+	}
+	if syncNodeTemplates {
+		recordNodeTemplateMembership(nodeID, templateID)
+	}
+}
+
+func deregisterTemplateReplica(templateID, nodeID string, syncNodeTemplates bool) {
+	if templateID == "" || nodeID == "" {
+		return
+	}
+	state := l.getImageCache(templateID)
+	if state != nil {
+		state.RemoveNode(nodeID)
+		if state.GetNumNodes() == 0 && l.imageCache != nil {
+			l.imageCache.Delete(templateID)
+		}
+	}
+	if syncNodeTemplates {
+		removeNodeTemplateMembership(nodeID, templateID)
+	}
+}
+
+func InvalidateImageState(imageName string) {
+	if imageName == "" || l.imageCache == nil {
+		return
+	}
+	l.imageCache.Delete(imageName)
+	removeTemplateMembershipFromAllNodes(imageName)
+}

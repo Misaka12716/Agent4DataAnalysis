@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./common.sh
+source "${SCRIPT_DIR}/common.sh"
+# shellcheck source=./support-compose-lib.sh
+source "${SCRIPT_DIR}/support-compose-lib.sh"
+
+require_root
+require_cmd docker
+require_cmd sed
+
+MYSQL_CONTAINER="${CUBE_SANDBOX_MYSQL_CONTAINER:-cube-sandbox-mysql}"
+REDIS_CONTAINER="${CUBE_SANDBOX_REDIS_CONTAINER:-cube-sandbox-redis}"
+MYSQL_VOLUME="${CUBE_SANDBOX_MYSQL_VOLUME:-cube-sandbox-mysql-data}"
+REDIS_VOLUME="${CUBE_SANDBOX_REDIS_VOLUME:-cube-sandbox-redis-data}"
+MYSQL_PORT="${CUBE_SANDBOX_MYSQL_PORT:-3306}"
+REDIS_PORT="${CUBE_SANDBOX_REDIS_PORT:-6379}"
+REDIS_PASSWORD="${CUBE_SANDBOX_REDIS_PASSWORD:-ceuhvu123}"
+MYSQL_DB="${CUBE_SANDBOX_MYSQL_DB:-cube_mvp}"
+MYSQL_USER="${CUBE_SANDBOX_MYSQL_USER:-cube}"
+MYSQL_PASSWORD="${CUBE_SANDBOX_MYSQL_PASSWORD:-cube_pass}"
+MYSQL_ROOT_PASSWORD="${CUBE_SANDBOX_MYSQL_ROOT_PASSWORD:-cube_root}"
+SQL_DIR="${TOOLBOX_ROOT}/sql"
+SUPPORT_DIR="${TOOLBOX_ROOT}/support"
+SUPPORT_TEMPLATE="${SUPPORT_DIR}/docker-compose.yaml.template"
+SUPPORT_COMPOSE_FILE="${SUPPORT_DIR}/docker-compose.yaml"
+
+ensure_dir "${SUPPORT_DIR}"
+ensure_dir "${SQL_DIR}"
+ensure_file "${SUPPORT_TEMPLATE}"
+
+escape_sed() {
+  printf '%s' "$1" | sed 's/[\/&]/\\&/g'
+}
+
+sed \
+  -e "s/__MYSQL_CONTAINER__/$(escape_sed "${MYSQL_CONTAINER}")/g" \
+  -e "s/__REDIS_CONTAINER__/$(escape_sed "${REDIS_CONTAINER}")/g" \
+  -e "s/__MYSQL_VOLUME__/$(escape_sed "${MYSQL_VOLUME}")/g" \
+  -e "s/__REDIS_VOLUME__/$(escape_sed "${REDIS_VOLUME}")/g" \
+  -e "s/__MYSQL_PORT__/$(escape_sed "${MYSQL_PORT}")/g" \
+  -e "s/__REDIS_PORT__/$(escape_sed "${REDIS_PORT}")/g" \
+  -e "s/__REDIS_PASSWORD__/$(escape_sed "${REDIS_PASSWORD}")/g" \
+  -e "s/__MYSQL_DB__/$(escape_sed "${MYSQL_DB}")/g" \
+  -e "s/__MYSQL_USER__/$(escape_sed "${MYSQL_USER}")/g" \
+  -e "s/__MYSQL_PASSWORD__/$(escape_sed "${MYSQL_PASSWORD}")/g" \
+  -e "s/__MYSQL_ROOT_PASSWORD__/$(escape_sed "${MYSQL_ROOT_PASSWORD}")/g" \
+  -e "s#__SQL_DIR__#$(escape_sed "${SQL_DIR}")#g" \
+  "${SUPPORT_TEMPLATE}" > "${SUPPORT_COMPOSE_FILE}"
+
+support_compose_run down --remove-orphans >/dev/null 2>&1 || true
+support_compose_run up -d
+
+wait_for_health "${MYSQL_CONTAINER}" || die "mysql container did not become healthy"
+wait_for_health "${REDIS_CONTAINER}" || die "redis container did not become healthy"
+
+log "support services ready under ${SUPPORT_DIR}"

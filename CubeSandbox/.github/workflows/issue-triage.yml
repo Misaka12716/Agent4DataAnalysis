@@ -1,0 +1,27 @@
+name: Issue Triage
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  triage-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: anthropics/claude-code-action@v1
+        env:
+            ANTHROPIC_BASE_URL: https://api.lkeap.cloud.tencent.com/plan/anthropic
+            ANTHROPIC_MODEL: glm-5.1
+            ANTHROPIC_SMALL_FAST_MODEL: glm-5.1
+            CLAUDE_CODE_SCRIPT_CAPS: '{"edit-issue-labels.sh":2}'
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: "/label-issue REPO: ${{ github.repository }} ISSUE_NUMBER: ${{ github.event.issue.number }}"
+          allowed_non_write_users: "*" # Required for issue triage workflow, if users without repo write access create issues
+          github_token: ${{ secrets.GITHUB_TOKEN }}

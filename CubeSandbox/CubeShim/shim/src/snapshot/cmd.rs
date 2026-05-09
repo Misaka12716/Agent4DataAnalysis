@@ -1,0 +1,121 @@
+// Copyright (c) 2024 Tencent Inc.
+// SPDX-License-Identifier: Apache-2.0
+//
+
+use anyhow::{anyhow, Result};
+use clap::{ArgAction, Args};
+use uuid::Uuid;
+
+use crate::{
+    common::utils::Utils,
+    sandbox::{config::VmResource, disk::Disk, pmem::Pmem},
+};
+
+use super::Snapshot;
+
+#[derive(Args, Debug)]
+pub struct SnapshotArgs {
+    /// Target path
+    #[arg(
+        long = "path",
+        value_name = "target path",
+        help = "target path",
+        required = true
+    )]
+    pub path: String,
+
+    /// Disk info
+    #[arg(
+        long = "disk",
+        value_name = "disk info",
+        help = "disk info",
+        required = true
+    )]
+    pub disk: String,
+
+    /// Resource info
+    #[arg(
+        long = "resource",
+        value_name = "resource {}",
+        help = "resource info",
+        required = true
+    )]
+    pub resource: String,
+
+    /// PMEM path
+    #[arg(
+        long = "pmem",
+        value_name = "pmem path",
+        help = "pmem path",
+        required = true
+    )]
+    pub pmem: String,
+
+    /// Kernel path
+    #[arg(
+        long = "kernel",
+        value_name = "kernel path",
+        help = "kernel path",
+        required = true
+    )]
+    pub kernel: String,
+
+    /// Don't create tap
+    #[arg(long = "notap", help = "don't create tap", action = ArgAction::SetTrue, required = false)]
+    pub notap: bool,
+
+    /// Force
+    #[arg(long = "force", help = "force", action = ArgAction::SetTrue, required = false)]
+    pub force: bool,
+
+    /// App snapshot
+    #[arg(long = "app-snapshot", help = "app-snapshot", action = ArgAction::SetTrue, required = false)]
+    pub app_snapshot: bool,
+
+    /// Vm id
+    #[arg(
+        long = "vm-id",
+        value_name = "vm id",
+        help = "vm id",
+        required_if_eq("app_snapshot", "true")
+    )]
+    pub vm_id: Option<String>,
+}
+
+pub async fn execute(args: SnapshotArgs) -> Result<()> {
+    let mut snapshot =
+        Snapshot::try_from(args).map_err(|e| anyhow!("failed to create snapshot: {}", e))?;
+    println!("debuginfo force:{}, tap:{}", snapshot.force, snapshot.tap);
+    snapshot
+        .handle()
+        .await
+        .map_err(|e| anyhow!("failed to handle snapshot: {}", e))?;
+    println!("snapshot success");
+    Ok(())
+}
+
+impl TryFrom<SnapshotArgs> for Snapshot {
+    type Error = String;
+
+    fn try_from(args: SnapshotArgs) -> std::result::Result<Self, Self::Error> {
+        let mut snapshot = Snapshot::new();
+        snapshot.id = Uuid::new_v4().to_string();
+        println!("InstanceId: {}", snapshot.id);
+        snapshot.res = Utils::anno_to_obj::<VmResource>(&args.resource)?;
+        snapshot.disk = Utils::anno_to_obj::<Vec<Disk>>(&args.disk)?;
+        snapshot.pmem = Utils::anno_to_obj::<Vec<Pmem>>(&args.pmem)?;
+        snapshot.path = args.path;
+        snapshot.kernel = args.kernel;
+        snapshot.tap = !args.notap;
+        snapshot.force = args.force;
+        snapshot.app_snapshot = args.app_snapshot;
+        if args.app_snapshot {
+            if args.vm_id.is_none() {
+                return Err("not specify the vmid in app snapshot mode".to_string());
+            }
+            snapshot.id = args.vm_id.unwrap();
+        }
+        println!("InstanceId: {}", snapshot.id);
+        Ok(snapshot)
+    }
+}

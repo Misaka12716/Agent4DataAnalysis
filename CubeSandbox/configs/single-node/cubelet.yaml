@@ -1,0 +1,15 @@
+common:
+  common_timeout: "10s"
+  enable_network_agent: true
+  network_agent_endpoint: "grpc+unix:///tmp/cube/network-agent-grpc.sock"
+
+host:
+  scheduler_label: "default-cluster"
+  quota:
+    mcpu_limit: 0
+    mem_limit: ""
+    mvm_limit: 0
+    creation_concurrent_num: 0
+  gc:
+    code_expiration_time: "72h"
+    image_expiration_time: "24h"

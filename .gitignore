@@ -9,7 +9,6 @@ tools/
 abolished/
 
 # CubeSandbox-specific ignore rules (scoped to avoid affecting other modules)
-/CubeSandbox
 /CubeSandbox/**/target/
 /CubeSandbox/.idea/
 /CubeSandbox/*.iml
