@@ -7,7 +7,7 @@
 配置来源：`src/configs/config.py`
 
 - `MYSQL_HOST=localhost`
-- `MYSQL_PORT=3307`
+- `MYSQL_PORT=3308`
 - `MYSQL_USER=root`
 - `MYSQL_PASSWORD=AgentPlatform2026!`
 - `MYSQL_DB=agent_platform`
@@ -19,7 +19,7 @@
 
 ### 2.1 启动命令
 
-当前使用的是 **Docker 单容器方式**，并且映射端口为 `3307:3306`，数据库初始化为 `agent_platform`。  
+当前使用的是 **Docker 单容器方式**，并且映射端口为 `3308:3306`，数据库初始化为 `agent_platform`。  
 考虑到根分区 `/` 可能写满，推荐将 MySQL 数据目录直接挂载到 `/data1`。
 
 ```bash
@@ -31,7 +31,7 @@ sudo chown -R 999:999 /data1/mysql/mysql8-agent-data
 sudo docker run -d \
   --name mysql8-agent \
   --restart unless-stopped \
-  -p 3307:3306 \
+  -p 3308:3306 \
   -v /data1/mysql/mysql8-agent-data:/var/lib/mysql \
   -e MYSQL_ROOT_PASSWORD=AgentPlatform2026! \
   -e MYSQL_DATABASE=agent_platform \
@@ -44,7 +44,7 @@ sudo docker run -d \
 
 - `--name mysql8-agent`：容器名，便于后续 `start/stop/logs/exec`
 - `--restart unless-stopped`：系统重启后自动拉起
-- `-p 3307:3306`：宿主机用 `3307`，容器内 MySQL 仍是 `3306`
+- `-p 3308:3306`：宿主机用 `3308`，容器内 MySQL 仍是 `3306`
 - `-v /data1/mysql/mysql8-agent-data:/var/lib/mysql`：将数据落盘到 `/data1`，避免根分区写满
 - `-e MYSQL_ROOT_PASSWORD=...`：初始化 root 密码
 - `-e MYSQL_DATABASE=agent_platform`：首次启动自动创建数据库
@@ -137,17 +137,17 @@ SELECT DATABASE();
 SELECT USER();
 ```
 
-查看 MySQL 是否监听 3307 端口（Linux）：
+查看 MySQL 是否监听 3308 端口（Linux）：
 
 ```bash
-ss -lntp | rg 3307
+ss -lntp | rg 3308
 ```
 
 查看容器状态：
 
 ```bash
 sudo docker ps -a --filter name=mysql8-agent
-sudo docker inspect mysql8-agent | rg -n "3307|MYSQL_DATABASE|MYSQL_ROOT_PASSWORD"
+sudo docker inspect mysql8-agent | rg -n "3308|MYSQL_DATABASE|MYSQL_ROOT_PASSWORD"
 ```
 
 容器已存在时，常用启停：
@@ -182,7 +182,7 @@ sudo docker rm mysql8-agent
 sudo docker run -d \
   --name mysql8-agent \
   --restart unless-stopped \
-  -p 3307:3306 \
+  -p 3308:3306 \
   -v /data1/mysql/mysql8-agent-data:/var/lib/mysql \
   -e MYSQL_ROOT_PASSWORD=AgentPlatform2026! \
   -e MYSQL_DATABASE=agent_platform \
@@ -206,7 +206,7 @@ sudo docker exec -it mysql8-agent mysql -u root -p -e "SHOW DATABASES;"
 请确保代码配置与容器参数一致：
 
 - `MYSQL_HOST=localhost`
-- `MYSQL_PORT=3307`
+- `MYSQL_PORT=3308`
 - `MYSQL_USER=root`
 - `MYSQL_PASSWORD=AgentPlatform2026!`
 - `MYSQL_DB=agent_platform`

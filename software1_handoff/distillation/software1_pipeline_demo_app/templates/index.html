@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Software1 Pipeline Demo</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+</head>
+<body>
+<header>
+  <h1>Software 1 — 拖拽式管线 Demo</h1>
+  <p>从左侧<strong>拖动</strong>算子到右侧构建流程；每一步可单独填参数。最后上传 CSV 运行。</p>
+  <p class="hint">若 Sortable 脚本被拦截，可<strong>双击</strong>左侧条目添加到管线。</p>
+</header>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <ul class="flash">
+    {% for cat, msg in messages %}
+      <li class="{{ cat }}">{{ msg }}</li>
+    {% endfor %}
+    </ul>
+  {% endif %}
+{% endwith %}
+
+<main class="builder-layout">
+  <section class="panel palette-panel">
+    <h2>算子库（拖到右侧）</h2>
+    <input type="search" class="palette-filter" id="paletteFilter" placeholder="筛选名称…" autocomplete="off"/>
+    <ul id="palette" class="palette-list">
+      {% for item in solver_catalog %}
+      <li class="palette-item" data-solver="{{ item.id }}">
+        <strong>{{ item.id }}</strong>
+        <span class="palette-desc">{{ item.desc }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section class="panel canvas-panel">
+    <h2>管线（拖动 <span class="mono">☰</span> 排序）</h2>
+    <div class="toolbar">
+      <label>载入示例
+        <select id="presetPick">
+          <option value="">—</option>
+          {% for name in preset_names %}
+            <option value="{{ name }}">{{ name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="button" id="btnClearPipeline" class="btn">清空管线</button>
+    </div>
+    <ul id="pipelineSteps" class="pipeline-list"></ul>
+    <p class="empty-hint" id="emptyHint">拖拽左侧模块到此处，或选示例预设。</p>
+
+    <form id="runForm" action="{{ url_for('run_pipeline') }}" method="post" enctype="multipart/form-data">
+      <input type="hidden" name="spec" id="specHidden" value=""/>
+      <label class="block file-label">上传 CSV
+        <input type="file" name="file" accept=".csv" required/>
+      </label>
+      <label class="block llm-label">
+        <input type="checkbox" name="use_llm" value="1" id="useLlm" {% if llm_available %}checked{% endif %} {% if not llm_available %}disabled{% endif %}/>
+        🤖 让大模型自动配置参数与列映射
+        {% if llm_available %}
+          <span class="hint">(.env 已加载 · 模型 <code>{{ llm_model }}</code>)</span>
+        {% else %}
+          <span class="hint">.env 未配 ANTHROPIC_API_KEY / ANTHROPIC_API_BASE_URL —— 将走规则映射</span>
+        {% endif %}
+      </label>
+      <button type="submit" class="primary">运行管线</button>
+    </form>
+
+    <details class="json-preview">
+      <summary>当前生成的 JSON（只读，调试）</summary>
+      <pre id="specPreview" class="mono small"></pre>
+    </details>
+  </section>
+</main>
+
+<script>
+  window.SOLVER_CATALOG = {{ solver_catalog | tojson }};
+  window.PRESETS = {{ presets | tojson }};
+</script>
+<script src="{{ url_for('static', filename='pipeline_builder.js') }}"></script>
+<script>
+(function(){
+  var pl = document.getElementById('pipelineSteps');
+  var hint = document.getElementById('emptyHint');
+  function upd(){ hint.style.display = pl.children.length ? 'none' : 'block'; }
+  new MutationObserver(upd).observe(pl, { childList: true });
+  upd();
+})();
+</script>
+</body>
+</html>

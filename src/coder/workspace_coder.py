@@ -16,6 +16,14 @@ from utils.model_logger import log_milestone, log_model_event, log_phase_end, lo
 from utils.session_memory import format_memory_for_prompt, read_session_memory_for_prompt
 
 
+def _escape_langchain_system_braces(text: str) -> str:
+    """
+    ChatPromptTemplate 默认按 f-string 解析花括号；system 消息里嵌入的 Python 代码若含 { ... } 会触发解析错误。
+    将字面量大括号加倍后，模板中只有明确的占位符（如 user 侧的 {user_body}）需要保留——system 侧传入的是已展开的纯文本。
+    """
+    return text.replace("{", "{{").replace("}", "}}")
+
+
 def _format_workspace_files_info(workspace_context: Optional[Dict[str, Any]], lang: str = "zh") -> str:
     """
     将工作区文件列表与 Excel 结构格式化为给 Coder 的说明文本，便于使用真实路径与格式编写代码。
@@ -92,7 +100,7 @@ def _generate_code_for_task(
     if mem_block:
         user_body = user_body + mem_block
     prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
+        ("system", _escape_langchain_system_braces(system_prompt)),
         ("user", "{user_body}"),
     ])
     llm = ChatOpenAI(
@@ -165,7 +173,7 @@ def correct_and_write_code(
     if mem_block:
         user_body = user_body + mem_block
     prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
+        ("system", _escape_langchain_system_braces(system_prompt)),
         ("user", "{user_body}"),
     ])
     llm = ChatOpenAI(

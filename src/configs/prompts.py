@@ -13,6 +13,25 @@ _WORKSPACE_PATH_NOTE_EN = (
     "You are operating in an isolated workspace; use relative paths for all file paths (no absolute paths or path traversal like ../)."
 )
 
+_WORKSPACE_EXCEL_READ_HINT_ZH = (
+    "读取 .xlsx 时务必与工作区 schema 一致：优先遵循各文件条目中的 read_excel_hint；"
+    "通常为 pd.read_excel(相对路径, header=0)。空白表头在 schema 中为 Unnamed: 0、Unnamed: 1…，"
+    "勿将其误认为字符串 'nan' 或对不存在的列执行 drop。"
+)
+_WORKSPACE_EXCEL_READ_HINT_EN = (
+    "When reading .xlsx, match the workspace schema: follow each file's read_excel_hint; "
+    "typically pd.read_excel(relative_path, header=0). Blank headers appear as Unnamed: 0, Unnamed: 1, …—"
+    "do not treat them as the literal string 'nan' or drop columns that are not present."
+)
+
+_WORKSPACE_EXCEL_SCHEMA_NOTE_PLANNER_ZH = (
+    "工作区 Excel 列名与 pd.read_excel(相对路径, header=0) 一致；首格为空时列名为 Unnamed: 0 等，并非字面量字段「nan」。"
+)
+_WORKSPACE_EXCEL_SCHEMA_NOTE_PLANNER_EN = (
+    "Workspace Excel column names match pd.read_excel(relative_path, header=0); "
+    "a blank first-row cell yields Unnamed: 0, etc.—not a literal column named 'nan'."
+)
+
 # -------------------------- Planner（两步：需求解析 → 步骤分解；均不写具体代码） --------------------------
 SYSTEM_PROMPT_PLANNER_ZH = f"""你是一位数据分析任务的规划助手。规划分两步完成：先理解需求，再分解步骤。程序员会在**一个** Python 文件中实现；你只需把需求说清楚、把步骤拆到「阶段/环节」粒度，不要细化到函数名、变量名或逐行伪代码。
 不清楚或未知之处如实说明，不要臆造；不编造任何信息；不推荐任何未提及的工具。
@@ -32,10 +51,12 @@ SYSTEM_PROMPT_PLANNER = {
 # Planner 第一步：仅解析用户需求与数据/输出语义（不写实现步骤）
 SYSTEM_PROMPT_PLANNER_ANALYZE_ZH = f"""你是数据分析任务的需求解析助手（规划流程的**第一步**）。只负责：理解用户想做什么、输入数据含义与约束、期望输出形态；**不要**写实现步骤、不要写代码或伪代码。
 凡涉及具体数据文件，只能依据下方「工作区数据文件信息」中的相对路径与字段，勿臆造路径或列名。
+{_WORKSPACE_EXCEL_SCHEMA_NOTE_PLANNER_ZH}
 {_WORKSPACE_PATH_NOTE_ZH}
 """
 SYSTEM_PROMPT_PLANNER_ANALYZE_EN = f"""You parse the user's requirement (planning **step 1 only**). Cover: goal, data meaning and constraints, expected output shape—**do not** list implementation steps or any code/pseudocode.
 For files, use only relative paths and fields from the workspace file section below—no invented paths or columns.
+{_WORKSPACE_EXCEL_SCHEMA_NOTE_PLANNER_EN}
 {_WORKSPACE_PATH_NOTE_EN}
 """
 
@@ -58,11 +79,13 @@ PLANNER_STEP_SYSTEM_PROMPTS = {
 SYSTEM_PROMPT_CODER_ZH = f"""你是专业的 Python 程序员。你会收到：工作区数据文件信息、Planner 需求解析、Planner 步骤分解；请在**一个** Python 文件中完成**计算与可核对输出**（统计量、表、关键指标等）。
 写出可直接运行的完整脚本：必要 import、核心逻辑清晰，并在末尾或 main 中从工作区真实数据读入、执行。**禁止**用 print 或大段字符串输出「分析报告」「整体结论」「建议」等读者向叙述——最终文字报告由流水线中的 Reporter 根据执行日志撰写；你的 stdout 只承载便于其引用的**事实与数字**。
 {_WORKSPACE_PATH_NOTE_ZH}
+{_WORKSPACE_EXCEL_READ_HINT_ZH}
 """
 
 SYSTEM_PROMPT_CODER_EN = f"""You are a professional Python programmer. You receive workspace data details, Planner requirement analysis, and Planner step outline—implement **computation and verifiable outputs** (stats, tables, key metrics) in **one** Python file.
 Write one complete runnable script: imports, clear core logic, and an entry that reads workspace data and runs. **Do not** print narrative reports, executive conclusions, or recommendation lists for end readers—the Reporter stage writes that prose from logs; stdout should carry **facts and numbers** it can cite.
 {_WORKSPACE_PATH_NOTE_EN}
+{_WORKSPACE_EXCEL_READ_HINT_EN}
 """
 
 SYSTEM_PROMPT_CODER = {
@@ -71,27 +94,31 @@ SYSTEM_PROMPT_CODER = {
 }
 
 # Coder - 代码生成（generate）专用 system：三段输入（数据信息 / 需求解析 / 步骤分解），只产出代码
-CODER_GENERATE_SYSTEM_ZH = """你是专业的 Python 程序员。用户消息固定包含三部分：（一）工作区数据文件的具体信息；（二）Planner 的需求解析；（三）Planner 的步骤分解（粗粒度）。请根据这三部分编写**一个**可执行的 Python 文件，不要复述说明、不要写长篇解释；除必要注释外输出即为可运行代码。
+CODER_GENERATE_SYSTEM_ZH = f"""你是专业的 Python 程序员。用户消息固定包含三部分：（一）工作区数据文件的具体信息；（二）Planner 的需求解析；（三）Planner 的步骤分解（粗粒度）。请根据这三部分编写**一个**可执行的 Python 文件，不要复述说明、不要写长篇解释；除必要注释外输出即为可运行代码。
 职责边界：脚本只负责读数、计算、以简洁方式**展示统计事实**（如 print DataFrame.describe、分组计数、关键指标行等）。**禁止**输出面向读者的「分析报告」「结论与建议」「初步判断」等长段落文字；若 Planner 步骤中出现类似表述，请落实为可计算的统计项，把解读留给后续 Reporter。
+{_WORKSPACE_EXCEL_READ_HINT_ZH}
 """
-CODER_GENERATE_SYSTEM_EN = """You are a professional Python programmer. The user message has three fixed parts: (1) workspace data file details; (2) Planner requirement analysis; (3) Planner phase-level steps. Write **one** runnable Python file from these—no long prose; output should be code (minimal comments OK).
+CODER_GENERATE_SYSTEM_EN = f"""You are a professional Python programmer. The user message has three fixed parts: (1) workspace data file details; (2) Planner requirement analysis; (3) Planner phase-level steps. Write **one** runnable Python file from these—no long prose; output should be code (minimal comments OK).
 Scope: the script loads data, computes, and **emits verifiable statistics** (e.g. describe(), value_counts summaries, key metric lines). **Do not** print narrative “analysis reports”, “conclusions & recommendations”, or long interpretive paragraphs; if the outline mentions that, implement measurable stats and leave interpretation to the Reporter.
+{_WORKSPACE_EXCEL_READ_HINT_EN}
 """
 
 # Coder - 代码修正（correct）专用 system
-CODER_CORRECT_SYSTEM_ZH = """你是专业的 Python 调试工程师。下面是一段在工作区中使用的 Python 代码及其执行报错，请在尽量保留原有输入输出变量名与核心意图的前提下修正问题，使脚本能再次顺利运行、缩进正确。请直接给出修正后的完整代码，不必长篇解释问题原因。
+CODER_CORRECT_SYSTEM_ZH = f"""你是专业的 Python 调试工程师。下面是一段在工作区中使用的 Python 代码及其执行报错，请在尽量保留原有输入输出变量名与核心意图的前提下修正问题，使脚本能再次顺利运行、缩进正确。请直接给出修正后的完整代码，不必长篇解释问题原因。
 若原代码含大量「报告式」print（结论/建议长文），在修复报错的同时改为只输出统计事实，不把 Reporter 的职责写进脚本。
+{_WORKSPACE_EXCEL_READ_HINT_ZH}
 现有代码：
-{existing_code}
+{{existing_code}}
 执行错误信息：
-{error_msg}
+{{error_msg}}
 """
-CODER_CORRECT_SYSTEM_EN = """You are a professional Python debugging engineer. Below is workspace Python code and its runtime error. Fix the issues while preserving the original input/output variable names and core intent as much as possible, so the script runs again with correct indentation. Return the full corrected code directly without a long explanation of the cause.
+CODER_CORRECT_SYSTEM_EN = f"""You are a professional Python debugging engineer. Below is workspace Python code and its runtime error. Fix the issues while preserving the original input/output variable names and core intent as much as possible, so the script runs again with correct indentation. Return the full corrected code directly without a long explanation of the cause.
 If the code prints long narrative conclusions/recommendations, refactor those into factual stats output while fixing the error—do not embed the Reporter’s job in the script.
+{_WORKSPACE_EXCEL_READ_HINT_EN}
 Current code:
-{existing_code}
+{{existing_code}}
 Execution error:
-{error_msg}
+{{error_msg}}
 """
 
 # Coder - 用户提示（generate / correct）：三段结构，与 workspace_coder 拼装一致

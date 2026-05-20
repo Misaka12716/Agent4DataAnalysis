@@ -416,6 +416,21 @@ def build_table_analysis_agent():
     return graph.compile()
 
 
+def _header_cell_to_schema_column_name(cell: Any, col_index: int) -> str:
+    """
+    将首行表头单元格转为与「pd.read_excel(..., header=0)」一致的列名语义。
+    空值 / NaN 不再变成字面量字符串 'nan'（会与实跑 read_excel 的 Unnamed: N 不一致，诱发 drop 列失败）。
+    """
+    if pd.isna(cell):
+        return f"Unnamed: {col_index}"
+    if isinstance(cell, str):
+        stripped = cell.strip()
+        if stripped == "":
+            return f"Unnamed: {col_index}"
+        return stripped
+    return str(cell).strip()
+
+
 # -------------------------- 工作区 Excel Schema/样本（供 Planner 规划前调用） --------------------------
 def read_workspace_excel_schema_and_sample(
     input_dir_abs_path: str,
@@ -458,8 +473,10 @@ def read_workspace_excel_schema_and_sample(
                     "shape": (0, 0),
                 }
                 continue
-            # 第一行作为列名（简单策略；复杂表头可由后续 LLM 流程处理）
-            df.columns = [str(c) for c in df.iloc[0]]
+            # 第一行作为列名，命名规则与 pd.read_excel(fp, header=0) 对齐，避免空表头被 str(NaN) 误标为 'nan'
+            row0 = df.iloc[0]
+            raw_names = [_header_cell_to_schema_column_name(row0.iloc[i], i) for i in range(len(row0))]
+            df.columns = dedup_column_names(raw_names)
             df = df.iloc[1:].reset_index(drop=True)
             cols = df.columns.tolist()
             buf = io.StringIO()
@@ -473,6 +490,11 @@ def read_workspace_excel_schema_and_sample(
                 "columns": cols,
                 "shape": df.shape,
                 "pandas_info": pandas_info,
+                # 与生成代码对齐：schema 按「首行为表头、空白列名为 Unnamed: N」构建，等价于默认 read_excel(header=0)
+                "read_excel_hint": (
+                    "Use pd.read_excel(<relative_path>, header=0); column names match this schema "
+                    "(first row is headers; blank headers are Unnamed: 0, Unnamed: 1, …)."
+                ),
             }
         except Exception as e:
             result["files"][rel_path] = {

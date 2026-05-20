@@ -13,11 +13,11 @@ DOWNLOAD_FOLDER = os.path.join(TEMP_FOLDER, "downloads/")  # 下载文件存储�
 # 模型相关配置
 # --------------------------
 SUPPORTED_MODELS: List[str] = [
-    "qwen3.6:27b-q8_0",
+    "qwen3-coder:30b",
     "qwen2.5:7b",
 ]  # 支持的模型列表
-DEFAULT_MODEL = "qwen3.6:27b-q8_0"  # 默认使用的模型（勿尾随空格，避免兼容 API 拒收）
-DEFAULT_CODER_MODEL = "qwen3.6:27b-q8_0"  # 默认使用的模型
+DEFAULT_MODEL = "qwen3-coder:30b"  # 默认使用的模型（勿尾随空格，避免兼容 API 拒收）
+DEFAULT_CODER_MODEL = "qwen3-coder:30b"  # 默认使用的模型
 # 顶层编排 Supervisor 路由模型（可与主模型相同）
 DEFAULT_ORCHESTRATOR_MODEL = os.getenv("DEFAULT_ORCHESTRATOR_MODEL", DEFAULT_MODEL)
 # 编排：Supervisor 调用次数上限、子阶段重试上限
@@ -53,6 +53,6 @@ MYSQL_PASSWORD = "AgentPlatform2026!"
 # 数据库名称
 MYSQL_DB = "agent_platform"
 # 数据库端口
-MYSQL_PORT = 3307
+MYSQL_PORT = 3308
 # 字符编码（支持emoji）
 MYSQL_CHARSET = "utf8mb4"

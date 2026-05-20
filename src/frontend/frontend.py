@@ -1,5 +1,5 @@
 """
-最简前端：用于测试 会话上传 / 快照 / 流式分析 接口。
+联调前端：面向数据科学场景的多智能体后端，用于测试会话上传、工作区与流式分析等接口。
 运行方式（在 src 目录下）: streamlit run frontend/frontend.py
 """
 import streamlit as st
@@ -9,8 +9,187 @@ import json
 # 后端地址（与 backend/server 默认端口一致）
 API_BASE = "http://localhost:52716"
 
-st.set_page_config(page_title="Excel 分析智能体测试", layout="wide")
-st.title("Excel 分析智能体 - 测试前端")
+
+def _short_text(s: str, max_len: int = 160) -> str:
+    s = s.strip() if isinstance(s, str) else str(s)
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 1] + "…"
+
+
+def _short_exc(e: BaseException, max_len: int = 120) -> str:
+    return _short_text(str(e), max_len)
+
+
+def _guess_upload_mime(name: str, declared: str | None) -> str:
+    if declared:
+        return declared
+    lower = (name or "").lower()
+    if lower.endswith(".csv"):
+        return "text/csv"
+    if lower.endswith(".tsv"):
+        return "text/tab-separated-values"
+    if lower.endswith(".json"):
+        return "application/json"
+    if lower.endswith(".txt") or lower.endswith(".log") or lower.endswith(".md"):
+        return "text/plain; charset=utf-8"
+    if lower.endswith(".xlsx"):
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if lower.endswith(".xls"):
+        return "application/vnd.ms-excel"
+    return "application/octet-stream"
+
+
+def _mask_phone(phone: str) -> str:
+    p = (phone or "").strip()
+    if len(p) >= 11:
+        return f"{p[:3]}****{p[-4:]}"
+    if len(p) >= 7:
+        return f"{p[:2]}****{p[-2:]}"
+    return p or "—"
+
+
+def _render_session_list_buttons(sessions: list, key_prefix: str) -> None:
+    """侧栏：每条会话一行可点按钮，切换当前 Session ID。"""
+    if not sessions:
+        st.caption("暂无会话记录。")
+        return
+    for idx, item in enumerate(sessions):
+        sid = str((item or {}).get("session_id") or "").strip()
+        title = str((item or {}).get("title") or "").strip() or "(未命名)"
+        if not sid:
+            continue
+        label = f"{idx + 1}. {title}"
+        safe_key = f"{key_prefix}_{idx}_{sid.replace('-', '_')}"
+        if st.button(label, key=safe_key, use_container_width=True, help=sid):
+            st.session_state["session_id"] = sid
+            st.session_state["_reset_session_id"] = sid
+            st.rerun()
+        st.caption(sid)
+
+
+def _fetch_user_sessions_list(api_base: str, user_id: int):
+    """返回 (sessions, error_msg)。error_msg 非空表示请求失败。"""
+    try:
+        r = httpx.get(
+            f"{api_base.rstrip('/')}/session/list",
+            params={"user_id": user_id},
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        data = r.json()
+        sessions = ((data.get("data") or {}).get("sessions")) or []
+        return sessions, None
+    except httpx.HTTPStatusError as e:
+        return [], f"列表失败 {e.response.status_code}: {_short_text(e.response.text, 200)}"
+    except Exception as e:
+        return [], _short_exc(e)
+
+
+st.set_page_config(
+    page_title="数据科学多智能体 · 联调控制台",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown(
+    """
+<style>
+    #MainMenu {visibility: hidden;}
+    header[data-testid="stHeader"] {background: transparent;}
+    .block-container {padding-top: 1.25rem; max-width: 1200px;}
+    h1 {letter-spacing: -0.02em;}
+    div[data-testid="stTabs"] button {font-weight: 500;}
+    [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {border-radius: 12px;}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
+@st.dialog("短信登录", width="small")
+def _login_dialog() -> None:
+    st.markdown("使用 **手机号 + 短信验证码** 登录；未注册账号将自动完成注册。")
+    base = str(st.session_state.get("api_base", API_BASE)).rstrip("/")
+    phone = st.text_input(
+        "手机号",
+        value="",
+        placeholder="11 位手机号，例如 13800138000",
+        key="dlg_auth_phone",
+        help="需为 11 位中国大陆手机号",
+    ).strip()
+    sms_code = st.text_input(
+        "短信验证码",
+        value="",
+        key="dlg_auth_sms",
+        help="6 位数字验证码",
+    ).strip()
+    c_send, c_login = st.columns(2)
+    with c_send:
+        if st.button("发送验证码", use_container_width=True, key="dlg_btn_send_sms"):
+            if not phone:
+                st.warning("请先填写手机号")
+            else:
+                with st.spinner("发送中…"):
+                    try:
+                        r = httpx.post(
+                            f"{base}/auth/send-sms-code",
+                            json={"phone": phone},
+                            timeout=10.0,
+                        )
+                        r.raise_for_status()
+                        st.success("验证码已发送")
+                        with st.expander("响应 JSON", expanded=False):
+                            st.json(r.json())
+                    except httpx.HTTPStatusError as e:
+                        st.error(f"发送失败 {e.response.status_code}: {_short_text(e.response.text, 200)}")
+                    except Exception as e:
+                        st.error(_short_exc(e))
+    with c_login:
+        if st.button("登录", type="primary", use_container_width=True, key="dlg_btn_login"):
+            if not phone:
+                st.warning("请填写手机号")
+            elif not sms_code:
+                st.warning("请填写验证码")
+            else:
+                with st.spinner("登录中…"):
+                    try:
+                        r = httpx.post(
+                            f"{base}/auth/login-with-sms",
+                            json={"phone": phone, "code": sms_code},
+                            timeout=10.0,
+                        )
+                        r.raise_for_status()
+                        data = r.json()
+                        login_data = data.get("data") or {}
+                        st.session_state["current_user_id"] = int(login_data.get("user_id") or 0)
+                        st.session_state["current_username"] = str(login_data.get("username") or "")
+                        st.session_state["logged_in_phone"] = phone
+                        st.success("登录成功")
+                        st.rerun()
+                    except httpx.HTTPStatusError as e:
+                        st.error(f"登录失败 {e.response.status_code}: {_short_text(e.response.text, 200)}")
+                    except Exception as e:
+                        st.error(_short_exc(e))
+    st.caption("关闭：点击遮罩外区域或按 Esc。")
+
+
+@st.dialog("退出登录", width="small")
+def _logout_dialog() -> None:
+    st.markdown("确定退出当前账户？退出后需重新登录才能创建会话。")
+    c_cancel, c_ok = st.columns(2)
+    with c_cancel:
+        if st.button("取消", use_container_width=True, key="dlg_logout_cancel"):
+            st.rerun()
+    with c_ok:
+        if st.button("确定退出", type="primary", use_container_width=True, key="dlg_logout_confirm"):
+            st.session_state["current_user_id"] = 0
+            st.session_state["current_username"] = ""
+            st.session_state["logged_in_phone"] = ""
+            st.session_state["last_user_sessions"] = []
+            st.rerun()
+
 
 if "current_user_id" not in st.session_state:
     st.session_state["current_user_id"] = 0
@@ -18,19 +197,52 @@ if "current_username" not in st.session_state:
     st.session_state["current_username"] = ""
 if "last_user_sessions" not in st.session_state:
     st.session_state["last_user_sessions"] = []
+if "logged_in_phone" not in st.session_state:
+    st.session_state["logged_in_phone"] = ""
 
-# 侧栏：会话与接口地址（会话 ID 由后端创建）
 if "session_id" not in st.session_state:
     st.session_state["session_id"] = ""
 if "session_id_input" not in st.session_state:
     st.session_state["session_id_input"] = st.session_state["session_id"]
-# 若上一步点了「创建会话」，在创建 widget 前先同步到输入框的 key，避免 widget 创建后再改 key 报错
 if "_reset_session_id" in st.session_state:
     st.session_state["session_id_input"] = st.session_state.pop("_reset_session_id")
 
 with st.sidebar:
-    st.subheader("配置")
+    with st.container(border=True):
+        st.markdown("##### 账户")
+        current_user_id = int(st.session_state.get("current_user_id", 0) or 0)
+        current_username = st.session_state.get("current_username", "") or ""
+        login_phone = str(st.session_state.get("logged_in_phone") or "").strip()
+        if current_user_id > 0:
+            st.caption("状态")
+            st.badge("已登录", color="green")
+            st.markdown(f"**手机** `{_mask_phone(login_phone)}`")
+            if login_phone:
+                st.caption("号码仅存于浏览器会话，用于展示与联调。")
+            st.markdown(f"**昵称** {current_username or '—'}")
+            st.caption(f"用户 ID `{current_user_id}`")
+            if st.button("退出登录", use_container_width=True, key="sidebar_btn_logout"):
+                _logout_dialog()
+        else:
+            st.caption("状态")
+            st.badge("未登录", color="gray")
+            st.caption("登录后将自动加载您的会话列表，点击可切换当前会话。")
+            if st.button("登录 / 注册", type="primary", use_container_width=True, key="sidebar_btn_open_login"):
+                _login_dialog()
+    st.divider()
+    st.markdown("### 后端连接状态")
     api_base = st.text_input("后端 API 地址", value=API_BASE, key="api_base")
+    try:
+        r = httpx.get(f"{api_base.rstrip('/')}/health", timeout=2.0)
+        if r.status_code == 200:
+            st.success("后端已连接")
+        else:
+            st.warning(f"后端返回 HTTP {r.status_code}")
+    except Exception as e:
+        st.error(f"未连接: {_short_exc(e)}")
+
+    st.divider()
+    st.markdown("### 会话")
     session_id_input = st.text_input(
         "会话 ID (Session ID)",
         key="session_id_input",
@@ -40,8 +252,7 @@ with st.sidebar:
     current_user_id = int(st.session_state.get("current_user_id", 0) or 0)
     current_username = st.session_state.get("current_username", "")
     if current_user_id > 0:
-        st.caption(f"当前登录用户: {current_username} (id={current_user_id})")
-        if st.button("创建新会话（后端生成）"):
+        if st.button("创建新会话（后端生成）", key="sidebar_btn_create_session"):
             try:
                 r = httpx.post(
                     f"{api_base.rstrip('/')}/session/create",
@@ -59,116 +270,76 @@ with st.sidebar:
                     st.success(f"会话已创建: {new_id}")
                     st.rerun()
             except httpx.HTTPStatusError as e:
-                st.error(f"创建会话失败 {e.response.status_code}: {e.response.text}")
+                st.error(f"创建会话失败 {e.response.status_code}: {_short_text(e.response.text, 200)}")
             except Exception as e:
-                st.error(str(e))
+                st.error(_short_exc(e))
     else:
-        st.caption("当前登录用户: 未登录（请先登录后创建会话）")
-    # 后端健康检查
-    try:
-        r = httpx.get(f"{api_base.rstrip('/')}/health", timeout=2.0)
-        if r.status_code == 200:
-            st.success("后端已连接")
+        st.caption("未登录时无法创建会话：请使用侧栏 **账户** 中的「登录 / 注册」。")
+
+    if current_user_id > 0:
+        sessions, err = _fetch_user_sessions_list(api_base, current_user_id)
+        if err:
+            st.session_state["last_user_sessions"] = []
+            st.error(err)
         else:
-            st.warning(f"后端返回 {r.status_code}")
-    except Exception as e:
-        st.error(f"后端未连接: {e}")
-
-# 五个测试区块（按逻辑先后：登录/会话 -> 上传数据 -> 工作区目录与文件 -> 流式分析 -> 快照校验）
-tab_login, tab_upload, tab_workspace, tab_analysis, tab_snapshot = st.tabs(
-    ["1. 用户登录与会话", "2. 上传 Excel", "3. 工作区目录与文件", "4. 流式分析", "5. 会话快照"]
-)
-
-with tab_upload:
-    st.subheader("上传 Excel 到会话工作区")
-    st.caption("调用 POST /session/upload-excel，文件会保存到该会话工作区根目录。")
-    uploaded = st.file_uploader("选择 Excel 文件", type=["xlsx", "xls","csv"], key="upload_excel")
-    if uploaded and session_id:
-        if st.button("上传", key="btn_upload"):
-            with st.spinner("上传中..."):
-                try:
-                    uploaded.seek(0)
-                    r = httpx.post(
-                        f"{api_base.rstrip('/')}/session/upload-excel",
-                        files={"file": (uploaded.name, uploaded.read(), uploaded.type or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-                        data={"session_id": session_id},
-                        timeout=60.0,
-                    )
-                    r.raise_for_status()
-                    data = r.json()
-                    st.success(f"上传成功：{data.get('relative_path', '')}")
-                    st.json(data)
-                except httpx.HTTPStatusError as e:
-                    st.error(f"请求失败 {e.response.status_code}: {e.response.text}")
-                except Exception as e:
-                    st.error(str(e))
-
-with tab_snapshot:
-    st.subheader("会话快照（断线重连）")
-    st.caption("调用 GET /session/snapshot，获取该会话的完整累计内容与版本号。")
-    if st.button("拉取快照", key="btn_snapshot"):
-        if not session_id:
-            st.warning("请先填写会话 ID")
-        else:
-            with st.spinner("拉取中..."):
+            st.session_state["last_user_sessions"] = sessions
+        st.markdown("##### 我的会话")
+        st.caption("点击一条可切换当前会话（用于上传、工作区与流式分析）。")
+        _render_session_list_buttons(st.session_state.get("last_user_sessions") or [], key_prefix="me")
+    else:
+        with st.expander("手动按 user_id 查询会话", expanded=False):
+            manual_user_id_sb = st.number_input(
+                "user_id",
+                min_value=1,
+                step=1,
+                value=1,
+                key="sidebar_manual_user_id",
+            )
+            if st.button("查询", key="sidebar_btn_list_sessions_manual"):
                 try:
                     r = httpx.get(
-                        f"{api_base.rstrip('/')}/session/snapshot",
-                        params={"session_id": session_id},
+                        f"{api_base.rstrip('/')}/session/list",
+                        params={"user_id": int(manual_user_id_sb)},
                         timeout=10.0,
                     )
                     r.raise_for_status()
                     data = r.json()
-                    version = data.get("version", 0)
-                    content = data.get("content", "")
-                    st.metric("当前版本号", version)
-                    st.text_area("完整累计内容", value=content or "(空)", height=200, key="snapshot_content")
+                    sessions = ((data.get("data") or {}).get("sessions")) or []
+                    st.session_state["last_user_sessions"] = sessions
+                    st.success(f"共 {len(sessions)} 个会话")
+                    with st.expander("响应 JSON", expanded=False):
+                        st.json(data)
                 except httpx.HTTPStatusError as e:
-                    st.error(f"请求失败 {e.response.status_code}: {e.response.text}")
+                    st.error(f"查询失败 {e.response.status_code}: {_short_text(e.response.text, 200)}")
                 except Exception as e:
-                    st.error(str(e))
+                    st.error(_short_exc(e))
+        nm = st.session_state.get("last_user_sessions") or []
+        if nm:
+            st.divider()
+            st.markdown("##### 会话列表")
+            _render_session_list_buttons(nm, key_prefix="nm")
 
-with tab_workspace:
-    st.subheader("工作区目录树与实际文件")
-    st.caption("调用 GET /session/workspace-tree，返回目录树（tree）与实际文件数据（files）。")
-    if st.button("拉取工作区目录与文件", key="btn_workspace_tree"):
-        if not session_id:
-            st.warning("请先填写会话 ID")
-        else:
-            with st.spinner("拉取中..."):
-                try:
-                    r = httpx.get(
-                        f"{api_base.rstrip('/')}/session/workspace-tree",
-                        params={"session_id": session_id},
-                        timeout=30.0,
-                    )
-                    r.raise_for_status()
-                    data = r.json()
-                    payload = data.get("data") or {}
-                    tree = payload.get("tree") or {}
-                    files = payload.get("files") or []
+# 主区顶部
+sid_for_display = session_id.strip() or st.session_state.get("session_id", "") or ""
+st.title("数据科学多智能体平台")
+st.markdown("大语言模型驱动的多智能体协作 · 会话与工作区 · 流式推理 — **联调与演示控制台**")
+if sid_for_display:
+    st.caption(f"完整会话 ID: `{sid_for_display}`")
 
-                    st.success(f"拉取成功，文件数: {len(files)}")
-                    st.markdown("#### 目录树（tree）")
-                    st.json(tree)
+col_stream, col_tools = st.columns([2.05, 1.0], gap="large")
 
-                    st.markdown("#### 实际文件（files）")
-                    st.json(files)
-                except httpx.HTTPStatusError as e:
-                    st.error(f"请求失败 {e.response.status_code}: {e.response.text}")
-                except Exception as e:
-                    st.error(str(e))
-
-with tab_analysis:
-    st.subheader("流式分析任务")
-    st.caption("调用 POST /run-analysis（开始）或 POST /run-analysis/reconnect（断线恢复），实时显示 SSE 推送。")
+with col_stream:
+    st.subheader("流式分析")
+    st.markdown("中间主区域用于 SSE 流式输出：报告片段与流内快照帧。")
     input_data = st.text_area(
         "分析需求 (input_data)",
-        value="请对工作区目录下的 Excel 做简单描述性统计，并给出结论。",
+        value="请结合工作区中的数据与文件，做简要理解与总结，并给出可继续深入的分析方向。",
         height=80,
         key="input_data",
     )
-    stream_placeholder = st.empty()
+    with st.container(border=True):
+        st.markdown("**实时输出**")
+        stream_placeholder = st.empty()
 
     def _run_sse(endpoint: str, req_json: dict, timeout_seconds: float = 300.0):
         log_events = []
@@ -195,220 +366,131 @@ with tab_analysis:
                             snapshot_version = int(payload.get("version") or 0)
                         elif event_type == "report_chunk":
                             report_parts.append(str(payload.get("content") or ""))
-                        # 实时更新占位：事件数 + 快照版本 + 已收报告长度
                         with stream_placeholder.container():
                             st.caption(
-                                f"已接收 {len(log_events)} 条事件，快照版本 {snapshot_version}，报告片段 {len(''.join(report_parts))} 字"
+                                f"已接收 {len(log_events)} 条事件 · 快照版本 {snapshot_version} · 报告 {len(''.join(report_parts))} 字"
                             )
                             if snapshot_content:
-                                st.markdown("---\n**快照锁存内容（重连首帧）**\n")
+                                st.markdown("**快照锁存（重连首帧）**")
                                 st.text_area(
                                     "snapshot_content_view",
                                     value=snapshot_content,
                                     height=180,
                                     key=f"snapshot_content_view_{endpoint}",
+                                    label_visibility="collapsed",
                                 )
                             if report_parts:
-                                st.markdown("---\n**报告内容（流式）**\n")
+                                st.markdown("**报告（流式）**")
                                 st.markdown("".join(report_parts))
                     except json.JSONDecodeError:
                         log_events.append({"raw": line[:200]})
         except httpx.HTTPStatusError as e:
-            st.error(f"请求失败 {e.response.status_code}: {e.response.text}")
+            st.error(f"请求失败 {e.response.status_code}: {_short_text(e.response.text, 200)}")
         except Exception as e:
-            st.error(str(e))
+            st.error(_short_exc(e))
 
         if log_events:
-            with st.expander("查看全部 SSE 事件"):
+            with st.expander("查看全部 SSE 事件", expanded=False):
                 st.json(log_events)
 
-    if st.button("开始流式分析", key="btn_run_analysis"):
-        if not session_id:
-            st.warning("请先填写会话 ID")
-        else:
-            _run_sse(
-                "/run-analysis",
-                {"session_id": session_id, "input_data": input_data},
-                timeout_seconds=300.0,
-            )
-
-    if st.button("断线恢复（reconnect）", key="btn_run_analysis_reconnect"):
-        if not session_id:
-            st.warning("请先填写会话 ID")
-        else:
-            _run_sse(
-                "/run-analysis/reconnect",
-                {"session_id": session_id},
-                timeout_seconds=300.0,
-            )
-
-with tab_login:
-    st.subheader("用户登录接口测试")
-    st.caption("用于测试发送短信验证码、短信登录（登录/注册一体）与用户会话列表查询接口。")
-    phone = st.text_input(
-        "手机号",
-        value="18395299120",
-        key="auth_phone",
-        help="按后端当前规则需为 11 位中国大陆手机号，例如 18395299120",
-    ).strip()
-    sms_code = st.text_input(
-        "短信验证码",
-        value="",
-        key="auth_sms_code",
-        help="输入收到的 6 位短信验证码",
-    ).strip()
-    logged_user_id = int(st.session_state.get("current_user_id", 0) or 0)
-
-    def _render_sessions_picker(sessions: list, key_prefix: str) -> None:
-        if not sessions:
-            st.info("当前没有可展示的会话。")
-            return
-        st.markdown("#### 会话列表（含标题）")
-        for idx, item in enumerate(sessions):
-            sid = str((item or {}).get("session_id") or "").strip()
-            title = str((item or {}).get("title") or "").strip() or "(未命名)"
-            if not sid:
-                continue
-            c1, c2 = st.columns([6, 1])
-            with c1:
-                st.text(f"{idx + 1}. {title} | {sid}")
-            with c2:
-                if st.button("使用", key=f"{key_prefix}_use_session_{idx}_{sid}"):
-                    st.session_state["session_id"] = sid
-                    st.session_state["_reset_session_id"] = sid
-                    st.success(f"已回填会话 ID: {sid}")
-                    st.rerun()
-
-    if logged_user_id > 0:
-        st.caption(f"已登录用户: {st.session_state.get('current_username', '')} (id={logged_user_id})")
-        if st.button("创建会话（后端生成）", key="btn_create_session_in_tab4"):
-            try:
-                r = httpx.post(
-                    f"{api_base.rstrip('/')}/session/create",
-                    json={"user_id": logged_user_id},
-                    timeout=10.0,
-                )
-                r.raise_for_status()
-                resp = r.json()
-                new_id = (((resp.get("data") or {}).get("session_id")) or "").strip()
-                if not new_id:
-                    st.error("创建会话成功但未返回 session_id")
-                else:
-                    st.session_state["session_id"] = new_id
-                    st.session_state["_reset_session_id"] = new_id
-                    st.success(f"会话已创建: {new_id}")
-                    st.rerun()
-            except httpx.HTTPStatusError as e:
-                st.error(f"创建会话失败 {e.response.status_code}: {e.response.text}")
-            except Exception as e:
-                st.error(str(e))
-        if st.button("查询该用户全部会话", key="btn_list_user_sessions"):
-            try:
-                r = httpx.get(
-                    f"{api_base.rstrip('/')}/session/list",
-                    params={"user_id": logged_user_id},
-                    timeout=10.0,
-                )
-                r.raise_for_status()
-                data = r.json()
-                sessions = ((data.get("data") or {}).get("sessions")) or []
-                st.session_state["last_user_sessions"] = sessions
-                st.success(f"查询成功，共 {len(sessions)} 个会话")
-                st.json(data)
-                _render_sessions_picker(sessions, key_prefix=f"login_{logged_user_id}")
-                # 便于继续联调：默认选中最新会话回填到当前会话 ID
-                if sessions:
-                    latest_session_id = str((sessions[0] or {}).get("session_id") or "").strip()
-                    if latest_session_id:
-                        st.session_state["session_id"] = latest_session_id
-                        st.session_state["_reset_session_id"] = latest_session_id
-                        st.info(f"已将最新会话回填到当前会话 ID: {latest_session_id}")
-            except httpx.HTTPStatusError as e:
-                st.error(f"查询会话失败 {e.response.status_code}: {e.response.text}")
-            except Exception as e:
-                st.error(str(e))
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("发送短信验证码", key="btn_send_sms_code"):
-            if not phone:
-                st.warning("请先输入手机号")
+    b_run, b_rec = st.columns(2)
+    with b_run:
+        if st.button("开始流式分析", key="btn_run_analysis"):
+            if not session_id:
+                st.warning("请先在侧栏填写会话 ID")
             else:
-                with st.spinner("发送中..."):
+                _run_sse(
+                    "/run-analysis",
+                    {"session_id": session_id, "input_data": input_data},
+                    timeout_seconds=300.0,
+                )
+    with b_rec:
+        if st.button("断线恢复（reconnect）", key="btn_run_analysis_reconnect"):
+            if not session_id:
+                st.warning("请先在侧栏填写会话 ID")
+            else:
+                _run_sse(
+                    "/run-analysis/reconnect",
+                    {"session_id": session_id},
+                    timeout_seconds=300.0,
+                )
+
+with col_tools:
+    with st.container(border=True):
+        st.markdown("### 上传数据")
+        st.caption(
+            "支持 Excel（.xlsx / .xls）、CSV（.csv / .tsv）、JSON（.json）、纯文本（.txt，另含 .md / .log）。可多选批量上传。"
+        )
+        uploaded_list = st.file_uploader(
+            "选择文件（可多选）",
+            type=["xlsx", "xls", "csv", "tsv", "json", "txt", "md", "log"],
+            accept_multiple_files=True,
+            key="upload_session_data",
+        )
+        if uploaded_list and session_id:
+            names = [getattr(f, "name", "?") for f in uploaded_list]
+            st.caption(f"已选 **{len(uploaded_list)}** 个文件：" + "、".join(names[:8]) + (" …" if len(names) > 8 else ""))
+            if st.button("全部上传", key="btn_upload"):
+                ok_paths: list[str] = []
+                ok_details: list = []
+                err_msgs: list[str] = []
+                with st.spinner(f"上传中（{len(uploaded_list)} 个文件）…"):
+                    for uf in uploaded_list:
+                        fname = getattr(uf, "name", "file")
+                        try:
+                            uf.seek(0)
+                            raw = uf.read()
+                            mime = _guess_upload_mime(fname, getattr(uf, "type", None))
+                            r = httpx.post(
+                                f"{api_base.rstrip('/')}/session/upload-excel",
+                                files={"file": (fname, raw, mime)},
+                                data={"session_id": session_id},
+                                timeout=120.0,
+                            )
+                            r.raise_for_status()
+                            resp_body = r.json()
+                            rp = str(resp_body.get("relative_path") or "").strip()
+                            ok_paths.append(rp or fname)
+                            ok_details.append({"file": fname, "response": resp_body})
+                        except httpx.HTTPStatusError as e:
+                            err_msgs.append(f"{fname}: HTTP {e.response.status_code} {_short_text(e.response.text, 120)}")
+                        except Exception as e:
+                            err_msgs.append(f"{fname}: {_short_exc(e)}")
+                if ok_paths:
+                    st.success(f"成功 **{len(ok_paths)}** 个：" + "；".join(ok_paths[:12]) + (" …" if len(ok_paths) > 12 else ""))
+                    with st.expander("各文件响应 JSON", expanded=False):
+                        st.json(ok_details)
+                for msg in err_msgs:
+                    st.error(msg)
+        elif not session_id:
+            st.caption("请先在侧栏填写或选择 Session ID。")
+
+        st.divider()
+        st.markdown("### 工作区目录与文件")
+        st.caption("拉取目录树与已落盘文件元数据。")
+        if st.button("拉取工作区", key="btn_workspace_tree"):
+            if not session_id:
+                st.warning("请先在侧栏填写会话 ID")
+            else:
+                with st.spinner("拉取中..."):
                     try:
-                        r = httpx.post(
-                            f"{api_base.rstrip('/')}/auth/send-sms-code",
-                            json={"phone": phone},
-                            timeout=10.0,
+                        r = httpx.get(
+                            f"{api_base.rstrip('/')}/session/workspace-tree",
+                            params={"session_id": session_id},
+                            timeout=30.0,
                         )
                         r.raise_for_status()
                         data = r.json()
-                        st.success("发送成功")
-                        st.json(data)
+                        payload = data.get("data") or {}
+                        tree = payload.get("tree") or {}
+                        files = payload.get("files") or []
+
+                        st.success(f"文件数: **{len(files)}**")
+                        with st.expander("目录树（tree）", expanded=False):
+                            st.json(tree)
+                        with st.expander("实际文件（files）", expanded=False):
+                            st.json(files)
                     except httpx.HTTPStatusError as e:
-                        st.error(f"请求失败 {e.response.status_code}: {e.response.text}")
+                        st.error(f"请求失败 {e.response.status_code}: {_short_text(e.response.text, 200)}")
                     except Exception as e:
-                        st.error(str(e))
-
-    with col2:
-        if st.button("短信登录 / 自动注册", key="btn_login_with_sms"):
-            if not phone:
-                st.warning("请先输入手机号")
-            elif not sms_code:
-                st.warning("请先输入短信验证码")
-            else:
-                with st.spinner("登录中..."):
-                    try:
-                        r = httpx.post(
-                            f"{api_base.rstrip('/')}/auth/login-with-sms",
-                            json={"phone": phone, "code": sms_code},
-                            timeout=10.0,
-                        )
-                        r.raise_for_status()
-                        data = r.json()
-                        login_data = data.get("data") or {}
-                        st.session_state["current_user_id"] = int(login_data.get("user_id") or 0)
-                        st.session_state["current_username"] = str(login_data.get("username") or "")
-                        st.success("登录成功")
-                        st.json(data)
-                        st.rerun()
-                    except httpx.HTTPStatusError as e:
-                        st.error(f"请求失败 {e.response.status_code}: {e.response.text}")
-                    except Exception as e:
-                        st.error(str(e))
-
-    st.markdown("---")
-    st.caption("未登录也可手动输入 user_id 测试 GET /session/list（返回 sessions）。")
-    manual_user_id = st.number_input(
-        "手动测试 user_id",
-        min_value=1,
-        step=1,
-        value=1,
-        key="manual_user_id_for_session_list",
-    )
-    if st.button("按 user_id 查询会话列表（手动）", key="btn_list_user_sessions_manual"):
-        try:
-            r = httpx.get(
-                f"{api_base.rstrip('/')}/session/list",
-                params={"user_id": int(manual_user_id)},
-                timeout=10.0,
-            )
-            r.raise_for_status()
-            data = r.json()
-            sessions = ((data.get("data") or {}).get("sessions")) or []
-            st.session_state["last_user_sessions"] = sessions
-            st.success(f"查询成功，共 {len(sessions)} 个会话")
-            st.json(data)
-            _render_sessions_picker(sessions, key_prefix=f"manual_{int(manual_user_id)}")
-        except httpx.HTTPStatusError as e:
-            st.error(f"查询会话失败 {e.response.status_code}: {e.response.text}")
-        except Exception as e:
-            st.error(str(e))
-
-    cached_sessions = st.session_state.get("last_user_sessions") or []
-    if cached_sessions:
-        st.markdown("---")
-        st.caption("最近一次查询结果（可直接点“使用”回填会话 ID）")
-        _render_sessions_picker(cached_sessions, key_prefix="cached")
-
-st.sidebar.caption("确保后端已启动: uvicorn backend.server:app --port 52716")
+                        st.error(_short_exc(e))
