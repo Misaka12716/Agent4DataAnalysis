@@ -25,32 +25,17 @@ def scalar_or_long_text_block(val: Any) -> str:
 
 def workspace_excel_info_to_structured_markdown(obj: Any, depth: int = 0) -> str:
     """
-    将工作区 Excel 元数据（与 JSON 同构的嵌套 dict/list）转为多级 Markdown 标题与列表，
-    便于规划模型阅读；层级随深度递增，最高到 ######。
+    已弃用：请使用 reader.formatters.workspace_digest_to_markdown。
+    仍接受 excel_schema 或 workspace_digest 形状的 dict。
     """
-    level = min(2 + depth, 6)
-    bars = "#" * level
+    from reader.formatters import workspace_digest_to_markdown
 
-    if isinstance(obj, dict):
-        chunks: list[str] = []
-        for key, val in obj.items():
-            chunks.append(f"{bars} {key}\n\n")
-            if isinstance(val, (dict, list)):
-                chunks.append(workspace_excel_info_to_structured_markdown(val, depth + 1))
-            else:
-                chunks.append(scalar_or_long_text_block(val))
-        return "".join(chunks)
-    if isinstance(obj, list):
-        if not obj:
-            return "（空）\n\n"
-        if all(not isinstance(x, (dict, list)) for x in obj):
-            return "".join(f"- {x}\n" for x in obj) + "\n"
-        chunks: list[str] = []
-        for i, item in enumerate(obj, 1):
-            chunks.append(f"{bars} 第 {i} 项\n\n")
-            chunks.append(workspace_excel_info_to_structured_markdown(item, depth + 1))
-        return "".join(chunks)
-    return scalar_or_long_text_block(obj)
+    if isinstance(obj, dict) and "files" in obj and not any(
+        isinstance(v, dict) and v.get("file_type") for v in (obj.get("files") or {}).values()
+    ):
+        wrapped = {"summary": obj.get("summary", ""), "files": obj.get("files") or {}}
+        return workspace_digest_to_markdown(wrapped, depth=depth)
+    return workspace_digest_to_markdown(obj, depth=depth)
 
 
 def create_llm(streaming: bool = True) -> ChatOpenAI:

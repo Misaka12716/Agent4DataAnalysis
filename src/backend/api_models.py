@@ -38,3 +38,8 @@ class SendSmsCodeRequest(BaseModel):
 class LoginWithSmsRequest(BaseModel):
     phone: str
     code: str
+
+
+class UpdateUsernameRequest(BaseModel):
+    user_id: int
+    username: str

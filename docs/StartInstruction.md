@@ -19,5 +19,6 @@ streamlit run frontend/frontend.py
 ```
 
 ## 相关文档
+- 大模型部署与配置：[`docs/Models.md`](Models.md)
 - SSE 详细说明：[`docs/SSE_Details.md`](SSE_Details.md)
 - 后端接口说明：[`docs/BackendAPI.md`](BackendAPI.md)

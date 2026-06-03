@@ -177,3 +177,98 @@ def build_login_with_sms_response(phone: str, code: str) -> JSONResponse:
         },
         status_code=200,
     )
+
+
+def build_update_username_response(user_id: int, username: str) -> JSONResponse:
+    if user_id <= 0:
+        return JSONResponse(
+            content={"code": 1, "msg": "missing or invalid parameter: user_id"},
+            status_code=400,
+        )
+    clean_username = (username or "").strip()
+    if not clean_username:
+        return JSONResponse(
+            content={"code": 1, "msg": "missing or invalid parameter: username"},
+            status_code=400,
+        )
+    if len(clean_username) > 128:
+        return JSONResponse(
+            content={"code": 1, "msg": "username exceeds maximum length of 128"},
+            status_code=400,
+        )
+
+    from db.session_store import SessionStore
+    from utils.mysql_utils import mysql_handler
+
+    exists, err = SessionStore.user_exists(user_id)
+    if err:
+        return JSONResponse(
+            content={"code": 4, "msg": "database error", "detail": err},
+            status_code=500,
+        )
+    if not exists:
+        return JSONResponse(
+            content={"code": 5, "msg": "user not found"},
+            status_code=404,
+        )
+
+    users, err = mysql_handler.query(
+        "SELECT * FROM users WHERE id = %s LIMIT 1",
+        (user_id,),
+    )
+    if err:
+        return JSONResponse(
+            content={"code": 4, "msg": "database error", "detail": err},
+            status_code=500,
+        )
+    user = users[0]
+    if _is_user_blocked(user):
+        return JSONResponse(
+            content={"code": 3, "msg": "user is blocked"},
+            status_code=403,
+        )
+
+    current_username = str(user.get("username") or "").strip()
+    if current_username == clean_username:
+        return JSONResponse(
+            content={
+                "code": 0,
+                "msg": "username updated",
+                "data": {"user_id": user_id, "username": clean_username},
+            },
+            status_code=200,
+        )
+
+    conflict_rows, err = mysql_handler.query(
+        "SELECT id FROM users WHERE username = %s AND id != %s LIMIT 1",
+        (clean_username, user_id),
+    )
+    if err:
+        return JSONResponse(
+            content={"code": 4, "msg": "database error", "detail": err},
+            status_code=500,
+        )
+    if conflict_rows:
+        return JSONResponse(
+            content={"code": 2, "msg": "username already taken"},
+            status_code=409,
+        )
+
+    affected, err = mysql_handler.execute(
+        "UPDATE users SET username = %s WHERE id = %s",
+        (clean_username, user_id),
+    )
+    if err or affected <= 0:
+        return JSONResponse(
+            content={"code": 4, "msg": "update failed", "detail": err},
+            status_code=500,
+        )
+
+    return JSONResponse(
+        content={
+            "code": 0,
+            "msg": "username updated",
+            "data": {"user_id": user_id, "username": clean_username},
+        },
+        status_code=200,
+    )

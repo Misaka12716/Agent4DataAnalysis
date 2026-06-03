@@ -10,16 +10,27 @@ UPLOAD_FOLDER = os.path.join(TEMP_FOLDER, "uploads/")  # 上传文件存储路�
 DOWNLOAD_FOLDER = os.path.join(TEMP_FOLDER, "downloads/")  # 下载文件存储路径
 
 # --------------------------
-# 模型相关配置
+# 模型相关配置（部署与分工见 docs/Models.md）
 # --------------------------
+GENERAL_MODEL = "qwen3.6:27b"  # 通用 / 多模态
+CODER_MODEL = "qwen3-coder:30b"  # Coder 专用
+
 SUPPORTED_MODELS: List[str] = [
-    "qwen3-coder:30b",
+    CODER_MODEL,
+    GENERAL_MODEL,
+    "qwen2.5:14b",
     "qwen2.5:7b",
-]  # 支持的模型列表
-DEFAULT_MODEL = "qwen3-coder:30b"  # 默认使用的模型（勿尾随空格，避免兼容 API 拒收）
-DEFAULT_CODER_MODEL = "qwen3-coder:30b"  # 默认使用的模型
+]
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", GENERAL_MODEL)
+DEFAULT_CODER_MODEL = os.getenv("DEFAULT_CODER_MODEL", CODER_MODEL)
 # 顶层编排 Supervisor 路由模型（可与主模型相同）
 DEFAULT_ORCHESTRATOR_MODEL = os.getenv("DEFAULT_ORCHESTRATOR_MODEL", DEFAULT_MODEL)
+# Reader 智能体：文件摘要与可选 Vision
+DEFAULT_READER_MODEL = os.getenv("DEFAULT_READER_MODEL", DEFAULT_MODEL)
+DEFAULT_VISION_MODEL = os.getenv("DEFAULT_VISION_MODEL", GENERAL_MODEL)
+READER_TABLE_SAMPLE_ROWS = int(os.getenv("READER_TABLE_SAMPLE_ROWS", "5"))
+READER_TEXT_PREVIEW_CHARS = int(os.getenv("READER_TEXT_PREVIEW_CHARS", "4000"))
+READER_ENABLE_LLM_TABLE_HEADER = os.getenv("READER_ENABLE_LLM_TABLE_HEADER", "0") == "1"
 # 编排：Supervisor 调用次数上限、子阶段重试上限
 MAX_SUPERVISOR_INVOCATIONS = int(os.getenv("MAX_SUPERVISOR_INVOCATIONS", "24"))
 MAX_CODER_CORRECTIONS = int(os.getenv("MAX_CODER_CORRECTIONS", "5"))

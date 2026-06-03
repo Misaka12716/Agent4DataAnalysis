@@ -5,14 +5,13 @@ from configs.prompts import (
     get_planner_step_system_prompt,
 )
 from utils.workspace_manager import resolve_workspace_root
-from planner.dataframe_reader import read_workspace_excel_schema_and_sample
+from reader.agent import run_workspace_reader_with_markdown_sync
 from db.session_store import SessionStore
 from planner.planner_utils import (
     combine_plan_text,
     finalize_plan_from_graph_state,
     route_after_analyze,
     run_planner_chain_stream,
-    workspace_excel_info_to_structured_markdown,
 )
 from utils.model_logger import log_milestone
 from utils.session_memory import format_memory_for_prompt, read_session_memory_for_prompt
@@ -186,11 +185,15 @@ class AgentPlanner:
         )
         if not workspace_abs:
             return "No files uploaded"
-        excel_info = read_workspace_excel_schema_and_sample(workspace_abs)
         try:
-            return workspace_excel_info_to_structured_markdown(excel_info).strip()
+            _digest, md = run_workspace_reader_with_markdown_sync(
+                workspace_abs,
+                session_id=session_id,
+                lang=self.lang,
+            )
+            return md.strip() or _digest.get("summary", "No files uploaded")
         except Exception:
-            return excel_info.get("summary", "No files uploaded")
+            return "No files uploaded"
 
     async def run_flow_with_workspace(
         self, session_id: str, input_requirement: str

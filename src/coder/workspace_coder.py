@@ -26,28 +26,38 @@ def _escape_langchain_system_braces(text: str) -> str:
 
 def _format_workspace_files_info(workspace_context: Optional[Dict[str, Any]], lang: str = "zh") -> str:
     """
-    将工作区文件列表与 Excel 结构格式化为给 Coder 的说明文本，便于使用真实路径与格式编写代码。
+    将工作区文件列表与数据摘要格式化为给 Coder 的说明文本，便于使用真实路径与格式编写代码。
     """
     if not workspace_context:
         return "" if lang == "zh" else ""
     file_list = workspace_context.get("file_list") or []
+    digest = workspace_context.get("workspace_digest") or {}
     excel_schema = workspace_context.get("excel_schema") or {}
+    files_detail = digest.get("files") if digest else {}
+    if not files_detail:
+        files_detail = excel_schema.get("files") or {}
     lines = []
     if lang == "zh":
         lines.append("## 工作区根目录下的文件与数据格式（必须使用以下真实路径与格式，禁止编造假数据或假路径）")
         lines.append("当前工作区根目录中的文件列表（相对路径）：")
         lines.append(json.dumps(file_list, ensure_ascii=False))
-        files_detail = excel_schema.get("files") or {}
+        if digest.get("summary"):
+            lines.append(f"工作区摘要：{digest.get('summary')}")
         if files_detail:
-            lines.append("其中 Excel 文件的结构、样本与 pandas.DataFrame.info() 摘要如下，读取时请按此格式使用：")
+            lines.append(
+                "各数据文件的结构、样本行、read_hint 及图片/文本摘要如下（表格请按 read_hint 读取）："
+            )
             lines.append(json.dumps(files_detail, ensure_ascii=False, default=str, indent=2))
     else:
         lines.append("## Workspace files and data format (you must use these real paths and formats; do not fabricate paths or data)")
         lines.append("File list in workspace root (relative paths):")
         lines.append(json.dumps(file_list, ensure_ascii=False))
-        files_detail = excel_schema.get("files") or {}
+        if digest.get("summary"):
+            lines.append(f"Workspace summary: {digest.get('summary')}")
         if files_detail:
-            lines.append("Excel file schemas and sample rows (use these for reading):")
+            lines.append(
+                "Per-file schemas, sample rows, read_hint, and image/text digests (use read_hint for tables):"
+            )
             lines.append(json.dumps(files_detail, ensure_ascii=False, default=str, indent=2))
     return "\n".join(lines)
 
@@ -76,9 +86,9 @@ def _generate_code_for_task(
     workspace_files_info = _format_workspace_files_info(workspace_context, lang)
     if not workspace_files_info.strip():
         workspace_files_info = (
-            "（当前工作区无可用文件列表或 Excel 结构，请仅依据下方需求与步骤合理假设路径；若无法假设则报错说明。）"
+            "（当前工作区无可用文件列表或数据摘要，请仅依据下方需求与步骤合理假设路径；若无法假设则报错说明。）"
             if lang == "zh"
-            else "(No file list or Excel schema in workspace; infer paths from steps or fail clearly.)"
+            else "(No file list or workspace digest in workspace; infer paths from steps or fail clearly.)"
         )
     ra = (requirement_analysis or "").strip()
     so = (steps_outline or "").strip()

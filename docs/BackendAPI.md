@@ -24,6 +24,7 @@
 |---|---|---|
 | `/auth/send-sms-code` | `POST` | 发送短信验证码（登录/注册前置步骤） |
 | `/auth/login-with-sms` | `POST` | 短信登录/注册一体：校验后返回user_id |
+| `/auth/update-username` | `POST` | 修改用户姓名/昵称（更新 `users.username`） |
 | `/session/create` | `POST` | 创建会话：生成session_id，关联user_id与工作区 |
 | `/session/save-title` | `POST` | 保存会话标题：按 session_id 首次写入标题，已有标题不覆盖 |
 | `/session/list` | `GET` | 查询用户会话列表：根据user_id返回 session_id 与标题 |
@@ -125,7 +126,53 @@
 
 ---
 
-### 3.3 创建会话
+### 3.3 修改用户姓名/昵称
+- 路径：`POST /auth/update-username`
+- 处理函数：`build_update_username_response(user_id, username)`（`src/backend/auth_service.py`）
+- Content-Type：`application/json`
+- 请求参数（query）：无
+- 请求体参数（JSON）：
+  - `user_id: int`（必填，正整数）
+  - `username: str`（必填，用户姓名/昵称，对应 `users.username`，最长 128 字符）
+- 请求体示例：
+```json
+{
+  "user_id": 12,
+  "username": "张三"
+}
+```
+- 成功返回格式：`application/json`
+  - `code: int`（`0` 表示成功）
+  - `msg: str`
+  - `data.user_id: int`
+  - `data.username: str`
+- 成功返回示例（`200`）：
+```json
+{
+  "code": 0,
+  "msg": "username updated",
+  "data": {
+    "user_id": 12,
+    "username": "张三"
+  }
+}
+```
+- 常见错误：
+  - `400`：`user_id` 非正整数，或 `username` 为空/超长
+  - `403`：用户状态为禁用
+  - `404`：`user_id` 不存在
+  - `409`：`username` 已被其他用户占用
+  - `500`：数据库查询/更新失败
+- 实现逻辑：
+  1. 校验 `user_id > 0` 且 `username` 去空格后非空、长度不超过 128。
+  2. 校验用户在 `users` 表存在且未被禁用。
+  3. 若新名称与当前相同，直接返回成功（幂等）。
+  4. 查重：排除自身后检查 `username` 唯一性。
+  5. 执行 `UPDATE users SET username = ? WHERE id = ?` 并返回更新后的信息。
+
+---
+
+### 3.4 创建会话
 - 路径：`POST /session/create`
 - 处理函数：`build_create_session_response(user_id: int)`
 - Content-Type：`application/json`
@@ -168,7 +215,7 @@
 
 ---
 
-### 3.4 查询用户会话列表
+### 3.5 查询用户会话列表
 - 路径：`GET /session/list`
 - 处理函数：`build_user_sessions_response(user_id: int)`
 - 请求参数（query）：
@@ -212,7 +259,7 @@
 
 ---
 
-### 3.5 保存会话标题
+### 3.6 保存会话标题
 - 路径：`POST /session/save-title`
 - 处理函数：`build_save_session_title_response(session_id: str, title: str)`
 - Content-Type：`application/json`
@@ -262,14 +309,20 @@
 
 ---
 
-### 3.6 上传会话数据文件
-- 路径：`POST /session/upload-excel`
+### 3.7 上传会话文件（多模态）
+
+- 路径：`POST /session/upload-excel`（历史路径名保留；实际支持表格 / 图片 / 文本，与 Reader 分类一致）
 - 处理函数：`handle_session_upload_excel(...)`
 - Content-Type：`multipart/form-data`
 - 请求参数（query）：无
 - 请求体参数（form-data）：
-  - `file`：文件（必填，通常为 `xlsx/xls/csv`）
+  - `file`：文件（必填）
   - `session_id`：字符串（必填）
+- **允许扩展名（白名单）**：
+  - **table**：`.xlsx`、`.xls`、`.csv`、`.tsv`
+  - **image**：`.png`、`.jpg`、`.jpeg`、`.gif`、`.webp`、`.bmp`（Reader 可走 Vision 多模态，需配置 `DEFAULT_VISION_MODEL`）
+  - **text**：`.txt`、`.md`、`.json`、`.yaml`、`.yml`、`.log`、`.xml`、`.html`、`.htm`
+  - 其余类型（如 `.pdf`）返回 `415`
 - 请求体示例（curl）：
 ```bash
 curl -X POST "http://localhost:52716/session/upload-excel" \
@@ -281,6 +334,8 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
   - `message: str`
   - `session_id: str`
   - `relative_path: str`
+  - `original_filename: str`
+  - `file_category: str`（`table` / `image` / `text`）
   - `workspace_abs_path: str`
 - 成功返回示例（`200`）：
 ```json
@@ -289,23 +344,27 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
   "message": "文件已写入会话工作区根目录",
   "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
   "relative_path": "data.xlsx",
+  "original_filename": "demo.xlsx",
+  "file_category": "table",
   "workspace_abs_path": "/data1/pjw/AgentPlatform/tmp/workspaces/9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 }
 ```
 - 常见错误：
   - `400`：`session_id` 为空
   - `404`：`session_id` 不存在（需先调用 `/session/create`）
+  - `415`：扩展名不在白名单
   - `413`：文件超过限制（当前 `2048MB`）
   - `500`：写文件失败
 - 实现逻辑（关键步骤）：
   1. 校验 `session_id` 非空且已存在。
-  2. 校验文件大小不超过 `MAX_FILE_SIZE`。
-  3. 按 `data.xxx`/`data_1.xxx` 递增命名避免重名。
-  4. 将文件写入会话工作区根目录，更新 `session_user` 表（数据库写入失败不阻断响应）。
+  2. 校验扩展名在 Reader 支持的 table/image/text 白名单内。
+  3. 校验文件大小不超过 `MAX_FILE_SIZE`。
+  4. 按 `data.xxx`/`data_1.xxx` 递增命名避免重名。
+  5. 将文件写入会话工作区根目录，并刷新 `SESSION_MEMORY.md` 快照。
 
 ---
 
-### 3.7 会话快照查询
+### 3.8 会话快照查询
 - 路径：`GET /session/snapshot`
 - 处理函数：`build_session_snapshot_response(session_id: str)`
 - 请求参数（query）：
@@ -331,7 +390,7 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
 
 ---
 
-### 3.8 会话工作区目录树查询
+### 3.9 会话工作区目录树查询
 - 路径：`GET /session/workspace-tree`
 - 处理函数：`build_session_workspace_tree_response(session_id: str)`
 - 请求参数（query）：
@@ -404,7 +463,7 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
 
 ---
 
-### 3.9 流式分析任务（SSE）
+### 3.10 流式分析任务（SSE）
 - 路径：`POST /run-analysis`
 - 处理函数：`build_run_analysis_response(body: StreamingTaskRequest)`
 - Content-Type：`application/json`
@@ -438,7 +497,7 @@ data: {"type":"report_chunk","content":"第一部分结论..."}
 
 ---
 
-### 3.10 断线恢复流（SSE）
+### 3.11 断线恢复流（SSE）
 - 路径：`POST /run-analysis/reconnect`
 - 处理函数：`build_reconnect_analysis_response(session_id: str)`
 - Content-Type：`application/json`
@@ -460,7 +519,7 @@ data: {"type":"snapshot","session_id":"...","content":"...","version":35,"timest
 
 ---
 
-### 3.11 健康检查
+### 3.12 健康检查
 - 路径：`GET /health`
 - 处理函数：`build_health_response()`（`src/backend/route_services.py`）
 - 请求参数：无
@@ -524,7 +583,17 @@ curl -X POST "http://localhost:52716/auth/login-with-sms" \
   }'
 ```
 
-### 5.3 创建会话
+### 5.3 修改用户姓名/昵称
+```bash
+curl -X POST "http://localhost:52716/auth/update-username" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": 12,
+    "username": "张三"
+  }'
+```
+
+### 5.4 创建会话
 ```bash
 curl -X POST "http://localhost:52716/session/create" \
   -H "Content-Type: application/json" \
@@ -533,12 +602,12 @@ curl -X POST "http://localhost:52716/session/create" \
   }'
 ```
 
-### 5.4 查询用户会话列表
+### 5.5 查询用户会话列表
 ```bash
 curl "http://localhost:52716/session/list?user_id=12"
 ```
 
-### 5.5 保存会话标题
+### 5.6 保存会话标题
 ```bash
 curl -X POST "http://localhost:52716/session/save-title" \
   -H "Content-Type: application/json" \
@@ -548,24 +617,24 @@ curl -X POST "http://localhost:52716/session/save-title" \
   }'
 ```
 
-### 5.6 上传数据文件
+### 5.7 上传数据文件
 ```bash
 curl -X POST "http://localhost:52716/session/upload-excel" \
   -F "file=@./demo.xlsx" \
   -F "session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 ```
 
-### 5.7 查询快照
+### 5.8 查询快照
 ```bash
 curl "http://localhost:52716/session/snapshot?session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 ```
 
-### 5.8 查询会话工作区目录树
+### 5.9 查询会话工作区目录树
 ```bash
 curl "http://localhost:52716/session/workspace-tree?session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 ```
 
-### 5.9 发起流式分析
+### 5.10 发起流式分析
 ```bash
 curl -N -X POST "http://localhost:52716/run-analysis" \
   -H "Content-Type: application/json" \
@@ -575,7 +644,7 @@ curl -N -X POST "http://localhost:52716/run-analysis" \
   }'
 ```
 
-### 5.10 健康检查
+### 5.11 健康检查
 ```bash
 curl http://localhost:52716/health
 ```
@@ -584,8 +653,7 @@ curl http://localhost:52716/health
 
 ## 6. 说明与注意事项
 
-- 目前 `upload-excel` 的后缀类型未在接口层强限制，实际由上游调用约定为 Excel/CSV。
-- 上传接口大小限制为 `2048MB`，请同时确认反向代理（如 Nginx）配置一致。
+- 上传接口在接口层校验扩展名，仅允许 Reader 可深度解析的 table/image/text 类型（见 §3.6）；大小限制为 `2048MB`，请同时确认反向代理（如 Nginx）配置一致。
 - SSE 是持续连接，前端需按流式协议处理 `data:` 行。
 - 会话内容按“完整累计文本”落库，体量较大时可考虑后续改为增量片段存储策略。
 - 短信验证码存储在服务内存中，服务重启后验证码会丢失；如需多实例部署，建议迁移到 Redis 等集中缓存。

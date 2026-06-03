@@ -6,6 +6,8 @@ import streamlit as st
 import httpx
 import json
 
+from reader.file_types import guess_upload_mime, upload_allowed_extensions
+
 # 后端地址（与 backend/server 默认端口一致）
 API_BASE = "http://localhost:52716"
 
@@ -19,25 +21,6 @@ def _short_text(s: str, max_len: int = 160) -> str:
 
 def _short_exc(e: BaseException, max_len: int = 120) -> str:
     return _short_text(str(e), max_len)
-
-
-def _guess_upload_mime(name: str, declared: str | None) -> str:
-    if declared:
-        return declared
-    lower = (name or "").lower()
-    if lower.endswith(".csv"):
-        return "text/csv"
-    if lower.endswith(".tsv"):
-        return "text/tab-separated-values"
-    if lower.endswith(".json"):
-        return "application/json"
-    if lower.endswith(".txt") or lower.endswith(".log") or lower.endswith(".md"):
-        return "text/plain; charset=utf-8"
-    if lower.endswith(".xlsx"):
-        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    if lower.endswith(".xls"):
-        return "application/vnd.ms-excel"
-    return "application/octet-stream"
 
 
 def _mask_phone(phone: str) -> str:
@@ -175,6 +158,50 @@ def _login_dialog() -> None:
     st.caption("关闭：点击遮罩外区域或按 Esc。")
 
 
+@st.dialog("修改昵称", width="small")
+def _edit_username_dialog() -> None:
+    base = str(st.session_state.get("api_base", API_BASE)).rstrip("/")
+    current_user_id = int(st.session_state.get("current_user_id", 0) or 0)
+    current_username = str(st.session_state.get("current_username") or "")
+    new_username = st.text_input(
+        "昵称",
+        value=current_username,
+        placeholder="请输入新的昵称",
+        key="dlg_edit_username",
+        help="对应后端 users.username 字段，最长 128 字符",
+    ).strip()
+    if st.button("保存", type="primary", use_container_width=True, key="dlg_btn_save_username"):
+        if not new_username:
+            st.warning("昵称不能为空")
+        elif current_user_id <= 0:
+            st.warning("请先登录")
+        else:
+            with st.spinner("保存中…"):
+                try:
+                    r = httpx.post(
+                        f"{base}/auth/update-username",
+                        json={"user_id": current_user_id, "username": new_username},
+                        timeout=10.0,
+                    )
+                    data = r.json()
+                    if r.status_code == 200 and int(data.get("code", -1)) == 0:
+                        updated = (data.get("data") or {}).get("username") or new_username
+                        st.session_state["current_username"] = str(updated)
+                        st.success("昵称已更新")
+                        st.rerun()
+                    else:
+                        st.error(data.get("msg") or f"更新失败 HTTP {r.status_code}")
+                except httpx.HTTPStatusError as e:
+                    try:
+                        err_data = e.response.json()
+                        st.error(err_data.get("msg") or _short_text(e.response.text, 200))
+                    except Exception:
+                        st.error(f"更新失败 {e.response.status_code}: {_short_text(e.response.text, 200)}")
+                except Exception as e:
+                    st.error(_short_exc(e))
+    st.caption("关闭：点击遮罩外区域或按 Esc。")
+
+
 @st.dialog("退出登录", width="small")
 def _logout_dialog() -> None:
     st.markdown("确定退出当前账户？退出后需重新登录才能创建会话。")
@@ -220,6 +247,8 @@ with st.sidebar:
             if login_phone:
                 st.caption("号码仅存于浏览器会话，用于展示与联调。")
             st.markdown(f"**昵称** {current_username or '—'}")
+            if st.button("修改昵称", use_container_width=True, key="sidebar_btn_edit_username"):
+                _edit_username_dialog()
             st.caption(f"用户 ID `{current_user_id}`")
             if st.button("退出登录", use_container_width=True, key="sidebar_btn_logout"):
                 _logout_dialog()
@@ -417,13 +446,14 @@ with col_stream:
 
 with col_tools:
     with st.container(border=True):
-        st.markdown("### 上传数据")
+        st.markdown("### 上传文件")
         st.caption(
-            "支持 Excel（.xlsx / .xls）、CSV（.csv / .tsv）、JSON（.json）、纯文本（.txt，另含 .md / .log）。可多选批量上传。"
+            "支持表格（xlsx / xls / csv / tsv）、图片（png / jpg / jpeg / gif / webp / bmp）、"
+            "文本（txt / md / json / yaml / yml / log / xml / html / htm）。可多选批量上传。"
         )
         uploaded_list = st.file_uploader(
             "选择文件（可多选）",
-            type=["xlsx", "xls", "csv", "tsv", "json", "txt", "md", "log"],
+            type=upload_allowed_extensions(),
             accept_multiple_files=True,
             key="upload_session_data",
         )
@@ -440,7 +470,7 @@ with col_tools:
                         try:
                             uf.seek(0)
                             raw = uf.read()
-                            mime = _guess_upload_mime(fname, getattr(uf, "type", None))
+                            mime = guess_upload_mime(fname, getattr(uf, "type", None))
                             r = httpx.post(
                                 f"{api_base.rstrip('/')}/session/upload-excel",
                                 files={"file": (fname, raw, mime)},

@@ -32,6 +32,39 @@ _WORKSPACE_EXCEL_SCHEMA_NOTE_PLANNER_EN = (
     "a blank first-row cell yields Unnamed: 0, etc.—not a literal column named 'nan'."
 )
 
+_WORKSPACE_DATA_NOTE_PLANNER_ZH = (
+    "工作区可能含 Excel/CSV 表格、图片/图表、文本等；列名与 read_hint 以 file_info 为准，勿臆造路径或字段。"
+)
+_WORKSPACE_DATA_NOTE_PLANNER_EN = (
+    "The workspace may include tables (Excel/CSV), images/charts, and text; use only paths and fields from file_info."
+)
+
+# -------------------------- Reader（工作区文件摘要） --------------------------
+SYSTEM_PROMPT_READER_ZH = """你是工作区文件摘要助手。根据 JSON 格式的工作区 digest，生成简洁、结构化的 Markdown，供数据分析规划助手阅读。
+要求：保留每个文件的相对路径；表格须保留列名、shape、read_hint、样本行要点；图片保留 vision_description；文本保留 preview 要点；不要编造未出现的字段。"""
+SYSTEM_PROMPT_READER_EN = """You summarize workspace file digests into concise Markdown for a planning assistant.
+Keep relative paths; for tables include columns, shape, read_hint, and sample row highlights; for images include vision_description; for text include preview highlights. Do not invent fields."""
+
+SYSTEM_PROMPT_READER_VISION_ZH = """你是数据分析助手。请用简洁中文描述图表或图片中的关键信息：类型、坐标轴/图例、趋势、异常点与可读出的数值要点。"""
+SYSTEM_PROMPT_READER_VISION_EN = """You are a data analysis assistant. Describe the chart/image concisely in English: type, axes/legend, trends, anomalies, and any readable numeric highlights."""
+
+SYSTEM_PROMPT_READER = {
+    "zh": SYSTEM_PROMPT_READER_ZH,
+    "en": SYSTEM_PROMPT_READER_EN,
+}
+
+SYSTEM_PROMPT_READER_VISION = {
+    "zh": SYSTEM_PROMPT_READER_VISION_ZH,
+    "en": SYSTEM_PROMPT_READER_VISION_EN,
+}
+
+USER_PROMPT_READER_SYNTHESIZE_ZH = """请将以下工作区文件 digest（JSON）压缩为规划助手可读的 Markdown（中文），保留路径与关键字段：
+
+{digest_json}"""
+USER_PROMPT_READER_SYNTHESIZE_EN = """Compress this workspace digest JSON into planner-friendly Markdown (English), keeping paths and key fields:
+
+{digest_json}"""
+
 # -------------------------- Planner（两步：需求解析 → 步骤分解；均不写具体代码） --------------------------
 SYSTEM_PROMPT_PLANNER_ZH = f"""你是一位数据分析任务的规划助手。规划分两步完成：先理解需求，再分解步骤。程序员会在**一个** Python 文件中实现；你只需把需求说清楚、把步骤拆到「阶段/环节」粒度，不要细化到函数名、变量名或逐行伪代码。
 不清楚或未知之处如实说明，不要臆造；不编造任何信息；不推荐任何未提及的工具。
@@ -51,11 +84,13 @@ SYSTEM_PROMPT_PLANNER = {
 # Planner 第一步：仅解析用户需求与数据/输出语义（不写实现步骤）
 SYSTEM_PROMPT_PLANNER_ANALYZE_ZH = f"""你是数据分析任务的需求解析助手（规划流程的**第一步**）。只负责：理解用户想做什么、输入数据含义与约束、期望输出形态；**不要**写实现步骤、不要写代码或伪代码。
 凡涉及具体数据文件，只能依据下方「工作区数据文件信息」中的相对路径与字段，勿臆造路径或列名。
+{_WORKSPACE_DATA_NOTE_PLANNER_ZH}
 {_WORKSPACE_EXCEL_SCHEMA_NOTE_PLANNER_ZH}
 {_WORKSPACE_PATH_NOTE_ZH}
 """
 SYSTEM_PROMPT_PLANNER_ANALYZE_EN = f"""You parse the user's requirement (planning **step 1 only**). Cover: goal, data meaning and constraints, expected output shape—**do not** list implementation steps or any code/pseudocode.
 For files, use only relative paths and fields from the workspace file section below—no invented paths or columns.
+{_WORKSPACE_DATA_NOTE_PLANNER_EN}
 {_WORKSPACE_EXCEL_SCHEMA_NOTE_PLANNER_EN}
 {_WORKSPACE_PATH_NOTE_EN}
 """
@@ -404,6 +439,12 @@ USER_PROMPTS = {
     "reporter": {
         "report": {"zh": USER_PROMPT_REPORTER_ZH, "en": USER_PROMPT_REPORTER_EN},
     },
+    "reader": {
+        "synthesize": {
+            "zh": USER_PROMPT_READER_SYNTHESIZE_ZH,
+            "en": USER_PROMPT_READER_SYNTHESIZE_EN,
+        },
+    },
 }
 
 
@@ -419,7 +460,7 @@ def get_user_prompt(role: str, task: str, lang: str = "zh", **params: Any) -> st
     """
     根据角色、任务与语言返回格式化后的用户提示词。
     缺失的占位符会替换为空字符串。
-    role: planner | worker | coder | reporter
+    role: planner | worker | coder | reporter | reader
     task: analyze_requirement | decompose_steps | re_plan (planner); req_analysis | assign_tasks | re_plan (worker); generate | correct (coder); report (reporter)
     lang: zh | en
     """
@@ -443,13 +484,14 @@ _ROLE_PROMPTS = {
     "worker": SYSTEM_PROMPT_WORKER,
     "reporter": SYSTEM_PROMPT_REPORTER,
     "supervisor": SYSTEM_PROMPT_SUPERVISOR,
+    "reader": SYSTEM_PROMPT_READER,
 }
 
 
 def get_system_prompt(role: str, lang: str = "zh") -> str:
     """
     根据角色与语言返回系统提示词。
-    role: planner | coder | worker | reporter | supervisor
+    role: planner | coder | worker | reporter | supervisor | reader
     lang: zh | en
     """
     prompts = _ROLE_PROMPTS.get(role.lower())

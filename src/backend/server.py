@@ -11,12 +11,14 @@ from backend.api_models import (
     ReconnectStreamRequest,
     SendSmsCodeRequest,
     LoginWithSmsRequest,
+    UpdateUsernameRequest,
     CreateSessionRequest,
     SaveSessionTitleRequest,
 )
 from backend.auth_service import (
     build_send_sms_code_response,
     build_login_with_sms_response,
+    build_update_username_response,
 )
 from backend.route_services import (
     build_health_response,
@@ -109,6 +111,11 @@ async def send_sms_code(body: SendSmsCodeRequest):
 @app.post("/auth/login-with-sms")
 async def login_with_sms(body: LoginWithSmsRequest):
     return build_login_with_sms_response(body.phone.strip(), body.code.strip())
+
+
+@app.post("/auth/update-username")
+async def update_username(body: UpdateUsernameRequest):
+    return build_update_username_response(body.user_id, body.username.strip())
 
 
 # -------------------------- 启动服务器 --------------------------

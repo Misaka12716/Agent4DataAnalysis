@@ -10,15 +10,16 @@ import tempfile
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from configs.config import (
+from reader.file_types import IMAGE_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS
     MAX_CODER_CORRECTIONS,
     MAX_SUPERVISOR_INVOCATIONS,
     SESSION_MEMORY_ENABLED,
     SESSION_MEMORY_PROMPT_MAX_CHARS,
 )
 from db.session_store import SessionStore
-from planner.dataframe_reader import read_workspace_excel_schema_and_sample
-from planner.planner_utils import workspace_excel_info_to_structured_markdown
+from reader.agent import run_workspace_reader_with_markdown_sync
+from reader.file_types import IMAGE_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS
+from reader.formatters import workspace_digest_to_markdown
 from utils.workspace_manager import list_workspace_files, resolve_workspace_root
 
 logger = logging.getLogger(__name__)
@@ -80,28 +81,37 @@ def format_memory_for_prompt(excerpt: str, lang: str) -> str:
     return f"\n\n[SESSION_MEMORY.md excerpt]\n{text}"
 
 
-def _classify_files(names: List[str]) -> tuple[List[str], List[str], List[str]]:
-    data_ext = {".xlsx", ".xls", ".csv", ".tsv"}
-    data, code, other = [], [], []
+def _classify_files(
+    names: List[str],
+) -> tuple[List[str], List[str], List[str], List[str], List[str]]:
+    data, images, text_files, code, other = [], [], [], [], []
     for n in names:
         low = n.lower()
         _, ext = os.path.splitext(low)
-        if ext in data_ext or low.startswith("data"):
+        if ext in TABLE_EXTENSIONS:
             data.append(n)
+        elif ext in IMAGE_EXTENSIONS:
+            images.append(n)
+        elif ext in TEXT_EXTENSIONS:
+            text_files.append(n)
         elif ext == ".py":
             code.append(n)
+        elif low.startswith("data"):
+            data.append(n)
         else:
             other.append(n)
-    return data, code, other
+    return data, images, text_files, code, other
 
 
-def _excel_digest(workspace_abs: str) -> str:
+def _workspace_digest(workspace_abs: str, session_id: str = "") -> str:
     try:
-        excel_info = read_workspace_excel_schema_and_sample(workspace_abs)
-        md = workspace_excel_info_to_structured_markdown(excel_info).strip()
+        digest, md = run_workspace_reader_with_markdown_sync(
+            workspace_abs, session_id=session_id
+        )
+        text = md.strip() or workspace_digest_to_markdown(digest).strip()
     except Exception:
-        return "（无法生成 Excel/CSV 结构摘要）"
-    return _truncate(md, _MAX_DIGEST_CHARS)
+        return "（无法生成工作区文件摘要）"
+    return _truncate(text, _MAX_DIGEST_CHARS)
 
 
 def _worker_section(worker_results: Optional[Dict[str, Any]]) -> str:
@@ -178,7 +188,7 @@ def build_session_memory_markdown(
     files = list((workspace_context or {}).get("file_list") or [])
     if not files and session_id:
         files = list_workspace_files(session_id)
-    data_f, code_f, other_f = _classify_files(files)
+    data_f, images_f, text_f, code_f, other_f = _classify_files(files)
 
     pd = plan_data if isinstance(plan_data, dict) else None
     ra = (pd.get("需求解析") if pd else "") or requirement_analysis
@@ -190,7 +200,16 @@ def build_session_memory_markdown(
     digest = ""
     root = resolve_workspace_root(session_id)
     if root:
-        digest = _excel_digest(root)
+        digest = _workspace_digest(root, session_id=session_id)
+    elif workspace_context and workspace_context.get("workspace_digest"):
+        try:
+            wd = workspace_context.get("workspace_digest")
+            digest = _truncate(
+                workspace_digest_to_markdown(wd) if isinstance(wd, dict) else str(wd),
+                _MAX_DIGEST_CHARS,
+            )
+        except Exception:
+            digest = "（workspace_digest 不可用）"
     elif workspace_context and workspace_context.get("excel_schema"):
         try:
             digest = _truncate(
@@ -246,6 +265,8 @@ def build_session_memory_markdown(
 **根目录文件（相对路径）:** {", ".join(files) if files else "（空）"}
 
 - **数据文件:** {", ".join(data_f) if data_f else "—"}
+- **图片:** {", ".join(images_f) if images_f else "—"}
+- **文本:** {", ".join(text_f) if text_f else "—"}
 - **代码文件:** {", ".join(code_f) if code_f else "—"}
 - **其他:** {", ".join(other_f) if other_f else "—"}
 
@@ -407,9 +428,14 @@ def persist_workspace_snapshot(
         if root:
             wc["file_list"] = list_workspace_files(session_id)
             try:
-                excel_info = read_workspace_excel_schema_and_sample(root)
-                wc["excel_schema"] = excel_info
+                from reader.agent import run_workspace_reader_sync
+                from reader.legacy import excel_schema_from_digest
+
+                wd = run_workspace_reader_sync(root, session_id=session_id)
+                wc["workspace_digest"] = wd
+                wc["excel_schema"] = excel_schema_from_digest(wd)
             except Exception:
+                wc["workspace_digest"] = {}
                 wc["excel_schema"] = {}
         empty: Dict[str, Any] = {
             "session_id": session_id,

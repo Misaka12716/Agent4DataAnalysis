@@ -6,6 +6,8 @@ from datetime import datetime
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from reader.file_types import classify_file, is_upload_allowed, upload_allowed_extensions
+
 from backend.analysis_stream import (
     streaming_task_generator,
     reconnect_streaming_task_generator,
@@ -40,7 +42,8 @@ async def handle_session_upload_excel(
     session_id: str,
 ) -> JSONResponse:
     """
-    上传 Excel 到会话工作区。要求 session_id 已存在于 session_user 映射表。
+    上传文件到会话工作区（表格 / 图片 / 文本，与 Reader 分类一致）。
+    要求 session_id 已存在于 session_user 映射表。
     """
     if not session_id.strip():
         raise HTTPException(status_code=400, detail="session_id 不能为空")
@@ -49,6 +52,15 @@ async def handle_session_upload_excel(
         raise HTTPException(status_code=500, detail=f"查询会话失败: {err}")
     if not session_user:
         raise HTTPException(status_code=404, detail="session_id 不存在，请先创建会话")
+
+    original_filename = file.filename or ""
+    ext = os.path.splitext(original_filename)[1].lower()
+    if not is_upload_allowed(original_filename):
+        allowed = ", ".join(f".{e}" for e in upload_allowed_extensions())
+        raise HTTPException(
+            status_code=415,
+            detail=f"不支持的文件类型: {ext or '（无扩展名）'}；允许: {allowed}",
+        )
 
     file_size = 0
     for chunk in file.file:
@@ -76,7 +88,7 @@ async def handle_session_upload_excel(
         persist_workspace_snapshot(
             session_id,
             lang=LANGUAGE,
-            note=f"已上传数据文件到工作区：`{safe_name}`。",
+            note=f"已上传文件到工作区：`{safe_name}`（类型: {classify_file(safe_name)}）。",
             input_hint="（上传后尚未发起新一轮分析时可参考下列文件列表）",
         )
     except Exception:
@@ -88,6 +100,8 @@ async def handle_session_upload_excel(
             "message": "文件已写入会话工作区根目录",
             "session_id": session_id,
             "relative_path": safe_name,
+            "original_filename": original_filename,
+            "file_category": classify_file(safe_name),
             "workspace_abs_path": workspace_abs,
         },
         status_code=200,

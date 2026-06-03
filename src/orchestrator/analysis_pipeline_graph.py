@@ -10,23 +10,30 @@ import contextvars
 import json
 import logging
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, TypedDict
+from typing import Any, AsyncGenerator, Dict, List, Optional, TypedDict
 
 from json_repair import loads as json_repair_loads
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
-from pydantic import BaseModel, Field
+from orchestrator.routing import (
+    SupervisorDecision,
+    clamp_route as _clamp_route,
+    code_write_succeeded as _code_write_succeeded,
+    plan_is_valid as _plan_is_valid,
+    should_correct_code as _should_correct_code,
+    should_skip_regenerate as _should_skip_regenerate,
+    supervisor_allowed_hint as _supervisor_allowed_hint,
+)
 
 from coder.workspace_coder import correct_and_write_code, generate_and_write_code
 from planner.agent_planner import AgentPlanner
-from planner.dataframe_reader import read_workspace_excel_schema_and_sample
+from reader.agent import run_workspace_reader_sync
+from reader.legacy import excel_schema_from_digest
 from reporter.report_agent import stream_report
 from configs.prompts import append_orchestrator_feedback, get_system_prompt
 from configs.config import (
     API_KEY,
     DEFAULT_ORCHESTRATOR_MODEL,
-    MAX_CODER_CORRECTIONS,
-    MAX_PLANNER_RETRIES,
     MAX_SUPERVISOR_INVOCATIONS,
     OPENAI_COMPATIBLE_API_BASE,
 )
@@ -150,39 +157,6 @@ class PipelineState(TypedDict, total=False):
     last_coder_mode: str
 
 
-class SupervisorDecision(BaseModel):
-    """Supervisor LLM 的结构化输出契约。"""
-    next_stage: Literal["planner", "coder", "worker", "reporter", "finish"] = Field(
-        description="下一步子阶段：planner/coder/worker/reporter，或 finish 结束"
-    )
-    feedback_for_next: str = Field(
-        default="",
-        max_length=8000,
-        description="给 Planner/Coder 的反馈（回溯时附上错误摘要等）",
-    )
-    reason: str = Field(
-        default="",
-        max_length=2000,
-        description="决策理由（简短）",
-    )
-
-
-def _plan_is_valid(plan_data: Optional[Dict[str, Any]]) -> bool:
-    # Planner 的最小有效产物：必须同时包含“需求解析”和“步骤分解”。
-    if not plan_data:
-        return False
-    ra = (plan_data.get("需求解析") or "").strip()
-    so = (plan_data.get("步骤分解") or "").strip()
-    return bool(ra and so)
-
-
-def _code_write_succeeded(coder_results: Optional[List[Dict[str, Any]]]) -> bool:
-    # 只要任一目标文件写入成功，就允许继续到 Worker 执行验证。
-    if not coder_results:
-        return False
-    return any(r.get("success") for r in coder_results)
-
-
 def _worker_error_text(worker_results: Optional[Dict[str, Any]]) -> str:
     # 汇总 Worker 错误，作为下一轮 Coder 修复输入（避免传入过长日志）。
     if not worker_results:
@@ -221,128 +195,10 @@ def _build_workspace_context(session_id: str) -> Dict[str, Any]:
     root = resolve_workspace_root(session_id)
     if root:
         ctx["file_list"] = list_workspace_files(session_id)
-        ctx["excel_schema"] = read_workspace_excel_schema_and_sample(root)
+        digest = run_workspace_reader_sync(root, session_id=session_id)
+        ctx["workspace_digest"] = digest
+        ctx["excel_schema"] = excel_schema_from_digest(digest)
     return ctx
-
-
-def _clamp_route(state: PipelineState, decision: SupervisorDecision) -> tuple[str, str]:
-    """
-    对 Supervisor 的路由决策做安全钳制，返回 (next_route, reason)。
-
-    背景：
-    - LLM 可能给出“语义上合理但状态上非法”的跳转（例如未执行 Worker 就 finish）。
-    - 该函数作为最终守门员，保证流水线状态机满足最小前置条件。
-
-    主要规则：
-    - 未完成报告前，finish 需满足 plan_ok + code_ok + worker 已运行，否则回退到缺失阶段。
-    - 无有效规划时，任何后续阶段都回退到 planner。
-    - 未有成功代码写入时，不允许直接进入 worker/reporter。
-    - 达到 Supervisor/Planner 重试上限时，优先推进到可收敛阶段，避免死循环。
-    """
-    raw = decision.next_stage
-    reason = (decision.reason or "").strip()
-    extra = ""
-
-    plan_ok = _plan_is_valid(state.get("plan_data"))
-    code_ok = _code_write_succeeded(state.get("coder_results"))
-    wr = state.get("worker_results")
-    rep_done = bool(state.get("reporter_done"))
-    force_rep = bool(state.get("force_reporter"))
-    sup_ct = int(state.get("supervisor_invoke_count") or 0)
-
-    if force_rep and raw not in ("reporter", "finish"):
-        raw = "reporter"
-        extra = "（已达 Supervisor 次数上限，强制生成报告）"
-
-    if raw == "finish":
-        if not rep_done and plan_ok and code_ok and wr is not None:
-            raw = "reporter"
-            extra = "（尚未产出报告，改为 reporter）"
-        elif not rep_done and not plan_ok:
-            raw = "planner"
-            extra = "（规划无效，不能结束）"
-        elif not rep_done and plan_ok and not code_ok:
-            raw = "coder"
-            extra = "（尚无成功代码，不能结束）"
-        elif not rep_done and plan_ok and code_ok and wr is None:
-            raw = "worker"
-            extra = "（尚未执行，不能结束）"
-
-    if not plan_ok and raw in ("coder", "worker", "reporter"):
-        raw = "planner"
-        extra = "（无有效规划，改为 planner）"
-
-    if plan_ok and raw == "worker" and not code_ok:
-        raw = "coder"
-        extra = "（尚无成功写入的代码，改为 coder）"
-
-    if plan_ok and raw == "reporter" and wr is None:
-        raw = "worker" if code_ok else "coder"
-        extra = "（尚未执行 worker，已钳制）"
-
-    if rep_done and raw not in ("finish",):
-        raw = "finish"
-        extra = "（报告已完成，仅允许结束）"
-
-    if sup_ct >= MAX_SUPERVISOR_INVOCATIONS and not rep_done and plan_ok and code_ok:
-        if raw not in ("reporter", "finish"):
-            raw = "reporter"
-            extra = "（Supervisor 次数上限，强制 reporter）"
-
-    if raw == "planner" and int(state.get("planner_run_count") or 0) >= MAX_PLANNER_RETRIES and plan_ok:
-        if not code_ok:
-            raw = "coder"
-            extra = "（Planner 重试次数上限，改为 coder）"
-        elif wr is None:
-            raw = "worker"
-            extra = "（Planner 重试次数上限，改为 worker）"
-        else:
-            raw = "reporter"
-            extra = "（Planner 重试次数上限，改为 reporter）"
-
-    if extra:
-        reason = f"{reason} {extra}".strip()
-
-    return raw, reason
-
-
-def _supervisor_allowed_hint(state: PipelineState) -> str:
-    # 给 Supervisor 的“软约束提示”，用于降低不合理路由概率。
-    # 注意：这是提示而非硬约束，最终仍由 _clamp_route() 保底校验。
-    last = (state.get("last_completed_stage") or "").strip()
-    plan_ok = _plan_is_valid(state.get("plan_data"))
-    code_ok = _code_write_succeeded(state.get("coder_results"))
-    wr = state.get("worker_results")
-    rep_done = bool(state.get("reporter_done"))
-    wfail = wr is not None and not wr.get("success", False)
-    lang = (state.get("lang") or "zh").strip().lower()
-    role_line = (
-        "Role split: Coder stdout = verifiable stats/facts only; Reporter writes narrative conclusions and recommendations from logs—avoid duplication."
-        if lang == "en"
-        else "职责边界：Coder 脚本只应输出统计/事实类结果（stdout）；叙述性结论与建议由 Reporter 根据日志撰写，二者勿重复。"
-    )
-
-    lines = [
-        f"last_completed_stage={last or '(无)'}",
-        f"plan_ok={plan_ok} code_ok={code_ok} worker_ran={wr is not None} worker_success={wr.get('success') if wr else None}",
-        f"reporter_done={rep_done} correction_attempts={state.get('correction_attempts', 0)}",
-        role_line,
-    ]
-    if wfail:
-        lines.append(
-            "Worker 未成功：通常应选择 coder，并在 feedback_for_next 中粘贴 stderr/关键错误。"
-        )
-    if not plan_ok:
-        lines.append("当前无有效规划：应选择 planner。")
-    elif last == "planner" and plan_ok:
-        lines.append("规划刚完成：通常应选择 coder。")
-    elif last == "coder" and code_ok:
-        lines.append("代码已写入：通常应选择 worker。")
-    elif last == "worker" and wr and wr.get("success"):
-        lines.append("执行成功：通常应选择 reporter。")
-    elif last == "reporter" and rep_done:
-        lines.append("报告已流式完成：必须选择 finish。")
-    return "\n".join(lines)
 
 
 def _stringify_llm_content(content: Any) -> str:
@@ -671,31 +527,42 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
     ws = state.get("workspace_context") or _build_workspace_context(session_id)
     wr = state.get("worker_results")
     fb = (state.get("supervisor_feedback") or "").strip()
-    # 是否进入“修复模式”：
-    # 1) Worker 已运行且失败
-    # 2) 之前至少有一次成功写入（说明文件已存在可修补）
-    # 3) 未超过最大修复次数
-    use_correct = (
-        wr is not None
-        and not wr.get("success", False)
-        and _code_write_succeeded(state.get("coder_results"))
-        and int(state.get("correction_attempts") or 0) < MAX_CODER_CORRECTIONS
-    )
+    use_correct = _should_correct_code(state)
+    skip_regenerate = _should_skip_regenerate(state)
     err_text = _worker_error_text(wr) if use_correct else ""
     if fb and use_correct:
         err_text = f"{fb}\n\n{err_text}".strip() if err_text else fb
 
+    mode_label = "correct" if use_correct else ("skip_regenerate" if skip_regenerate else "generate")
     log_phase_start(
         session_id,
         "coder",
         {
             "relative_path": rel,
-            "mode": "correct" if use_correct else "generate",
+            "mode": mode_label,
             "correction_attempts_before": int(state.get("correction_attempts") or 0),
         },
     )
 
     mem_ex = read_session_memory_for_prompt(session_id)
+
+    if skip_regenerate:
+        log_phase_end(
+            session_id,
+            "coder",
+            {
+                "relative_path": rel,
+                "mode": "skip_regenerate",
+                "skipped": True,
+                "correction_attempts_after": int(state.get("correction_attempts") or 0),
+            },
+        )
+        return {
+            "last_completed_stage": "coder",
+            "supervisor_feedback": "",
+            "worker_results": None,
+            "last_coder_mode": "skip_regenerate",
+        }
 
     if use_correct:
         # 修复路径：把错误摘要喂给 Coder，定点修补目标文件。
@@ -763,6 +630,8 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
         "supervisor_feedback": "",
         "last_coder_mode": mode_label,
     }
+    if use_correct and _code_write_succeeded(results):
+        cod_out["worker_results"] = None
     try:
         persist_from_pipeline_state(
             {**state, **cod_out},

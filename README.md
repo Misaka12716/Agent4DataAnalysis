@@ -179,12 +179,14 @@ streamlit run frontend/frontend.py
 
 ### `POST /session/upload-excel`
 
-上传 Excel/CSV 到会话工作区根目录。
+上传表格 / 图片 / 文本到会话工作区根目录（扩展名白名单与 Reader 一致；路径名保留历史兼容）。
 
 - form-data:
-  - `file`: 文件（服务端有大小上限，与路由中配置一致）
+  - `file`: 文件（table: xlsx/xls/csv/tsv；image: png/jpg/jpeg/gif/webp/bmp；text: txt/md/json/yaml/yml/log/xml/html/htm）
   - `session_id`: 会话 ID（必填）
-  - `user_id`: 用户 ID（默认 0）
+
+- 成功响应额外字段：`original_filename`、`file_category`（`table` / `image` / `text`）
+- 不支持类型返回 `415`
 
 ### `GET /session/snapshot`
 
@@ -205,7 +207,7 @@ streamlit run frontend/frontend.py
 
 ## 工作机制（与代码一致）
 
-1. **上传**：前端将数据文件写入会话工作区；Planner 侧会列举工作区文件并读取 Excel 结构样例，作为规划上下文。
+1. **上传**：前端将表格 / 图片 / 文本写入会话工作区；Reader 按类型生成 digest（图片可走 Vision 多模态），Planner 侧会列举工作区文件并读取结构样例，作为规划上下文。
 2. **Supervisor**：每次子阶段结束后回到 Supervisor，由结构化 LLM 决策下一步（`planner` / `coder` / `worker` / `reporter` / `finish`）；非法跳步会被代码侧「钳制」为合法路由（例如无有效规划时不能进 Coder，未执行 Worker 时不能进 Reporter）。
 3. **Planner**：产出包含「需求解析」「步骤分解」等字段的规划；无效规划会触发重试直至上限。
 4. **Coder**：首次生成并写入工作区代码（默认 `main.py`）；若上一轮 Worker 失败且未超修正次数，则走「修正写入」路径，并附带 stderr 等错误摘要。
@@ -255,6 +257,7 @@ streamlit run frontend/frontend.py
 ## 相关文档
 
 - 启动说明：[`docs/StartInstruction.md`](docs/StartInstruction.md)
+- 大模型部署与配置：[`docs/Models.md`](docs/Models.md)
 - 后端接口说明：[`docs/BackendAPI.md`](docs/BackendAPI.md)
 - SSE 详细说明：[`docs/SSE_Details.md`](docs/SSE_Details.md)
 - MySQL 说明：[`docs/MySQL.md`](docs/MySQL.md)
