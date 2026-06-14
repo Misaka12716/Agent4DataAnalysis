@@ -41,9 +41,29 @@ LANGUAGE = "zh"  # 使用的语言(zn/en)
 SESSION_MEMORY_ENABLED = os.getenv("SESSION_MEMORY_ENABLED", "1") == "1"
 SESSION_MEMORY_PROMPT_MAX_CHARS = int(os.getenv("SESSION_MEMORY_PROMPT_MAX_CHARS", "6000"))
 
+# --------------------------
+# Cube Sandbox（E2B SDK）
+# --------------------------
+from sandbox.config import (  # noqa: E402
+    CUBE_SANDBOX_ENABLED,
+    CUBE_TEMPLATE_ID,
+    E2B_API_KEY,
+    E2B_API_URL,
+    SANDBOX_TIMEOUT,
+    SANDBOX_WORKDIR,
+    is_sandbox_enabled,
+)
+
 
 # 是否开启大模型全流程日志记录
 ENABLE_MODEL_LOG: bool = True
+
+# --------------------------
+# JWT 鉴权配置
+# --------------------------
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "168"))
 
 # --------------------------
 # API 相关配置

@@ -147,8 +147,12 @@ CREATE TABLE IF NOT EXISTS session_content (
 
 ```bash
 cd src
+# 生产环境务必设置 JWT 签名密钥
+export JWT_SECRET_KEY="your-production-secret"
 uvicorn backend.server:app --host 0.0.0.0 --port 52716
 ```
+
+鉴权说明见 [docs/AUTH.md](docs/AUTH.md)。
 
 健康检查：
 
@@ -172,6 +176,8 @@ streamlit run frontend/frontend.py
 ---
 
 ## API 简要说明
+
+除 `/health`、`/auth/send-sms-code`、`/auth/login-with-sms` 外，接口需携带 `Authorization: Bearer <access_token>`。详见 [docs/AUTH.md](docs/AUTH.md) 与 [docs/BackendAPI.md](docs/BackendAPI.md)。
 
 ### `GET /health`
 

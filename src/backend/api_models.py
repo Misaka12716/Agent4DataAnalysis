@@ -22,10 +22,6 @@ class ReconnectStreamRequest(BaseModel):
     session_id: str
 
 
-class CreateSessionRequest(BaseModel):
-    user_id: int
-
-
 class SaveSessionTitleRequest(BaseModel):
     session_id: str
     title: str
@@ -41,5 +37,4 @@ class LoginWithSmsRequest(BaseModel):
 
 
 class UpdateUsernameRequest(BaseModel):
-    user_id: int
     username: str

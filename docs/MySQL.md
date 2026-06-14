@@ -300,7 +300,7 @@ WHERE su.session_id = '你的_session_id';
 
 ### 9.1 `users`（用户基础信息）
 
-用途：存放平台用户账号信息，便于后续做登录、权限、审计扩展。
+用途：存放平台用户账号信息；短信登录后签发 JWT，`user_id` 由 token 解析，不再由客户端明文传参。
 
 主要字段与格式：
 
@@ -325,6 +325,7 @@ password_hash=$2b$12$...
 
 用途：把 `session_id` 映射到 `user_id` 与会话工作区绝对路径。  
 这是定位“某次对话对应哪个工作目录”的关键表。
+后端受保护接口会校验 `session_user.user_id` 是否等于 JWT 中的当前用户（见 [AUTH.md](AUTH.md)）。  
 后端 `GET /session/list` 接口会直接读取本表的 `session_id/title` 并通过 `sessions` 字段返回。
 
 主要字段与格式：

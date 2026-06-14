@@ -2,6 +2,13 @@
 联调前端：面向数据科学场景的多智能体后端，用于测试会话上传、工作区与流式分析等接口。
 运行方式（在 src 目录下）: streamlit run frontend/frontend.py
 """
+import sys
+from pathlib import Path
+
+_SRC = Path(__file__).resolve().parents[1]
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
 import streamlit as st
 import httpx
 import json
@@ -51,12 +58,19 @@ def _render_session_list_buttons(sessions: list, key_prefix: str) -> None:
         st.caption(sid)
 
 
-def _fetch_user_sessions_list(api_base: str, user_id: int):
+def _auth_headers() -> dict[str, str]:
+    token = str(st.session_state.get("access_token") or "").strip()
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _fetch_user_sessions_list(api_base: str):
     """返回 (sessions, error_msg)。error_msg 非空表示请求失败。"""
     try:
         r = httpx.get(
             f"{api_base.rstrip('/')}/session/list",
-            params={"user_id": user_id},
+            headers=_auth_headers(),
             timeout=10.0,
         )
         r.raise_for_status()
@@ -148,6 +162,7 @@ def _login_dialog() -> None:
                         login_data = data.get("data") or {}
                         st.session_state["current_user_id"] = int(login_data.get("user_id") or 0)
                         st.session_state["current_username"] = str(login_data.get("username") or "")
+                        st.session_state["access_token"] = str(login_data.get("access_token") or "")
                         st.session_state["logged_in_phone"] = phone
                         st.success("登录成功")
                         st.rerun()
@@ -180,7 +195,8 @@ def _edit_username_dialog() -> None:
                 try:
                     r = httpx.post(
                         f"{base}/auth/update-username",
-                        json={"user_id": current_user_id, "username": new_username},
+                        json={"username": new_username},
+                        headers=_auth_headers(),
                         timeout=10.0,
                     )
                     data = r.json()
@@ -213,6 +229,7 @@ def _logout_dialog() -> None:
         if st.button("确定退出", type="primary", use_container_width=True, key="dlg_logout_confirm"):
             st.session_state["current_user_id"] = 0
             st.session_state["current_username"] = ""
+            st.session_state["access_token"] = ""
             st.session_state["logged_in_phone"] = ""
             st.session_state["last_user_sessions"] = []
             st.rerun()
@@ -220,6 +237,8 @@ def _logout_dialog() -> None:
 
 if "current_user_id" not in st.session_state:
     st.session_state["current_user_id"] = 0
+if "access_token" not in st.session_state:
+    st.session_state["access_token"] = ""
 if "current_username" not in st.session_state:
     st.session_state["current_username"] = ""
 if "last_user_sessions" not in st.session_state:
@@ -285,7 +304,7 @@ with st.sidebar:
             try:
                 r = httpx.post(
                     f"{api_base.rstrip('/')}/session/create",
-                    json={"user_id": current_user_id},
+                    headers=_auth_headers(),
                     timeout=10.0,
                 )
                 r.raise_for_status()
@@ -306,7 +325,7 @@ with st.sidebar:
         st.caption("未登录时无法创建会话：请使用侧栏 **账户** 中的「登录 / 注册」。")
 
     if current_user_id > 0:
-        sessions, err = _fetch_user_sessions_list(api_base, current_user_id)
+        sessions, err = _fetch_user_sessions_list(api_base)
         if err:
             st.session_state["last_user_sessions"] = []
             st.error(err)
@@ -316,37 +335,7 @@ with st.sidebar:
         st.caption("点击一条可切换当前会话（用于上传、工作区与流式分析）。")
         _render_session_list_buttons(st.session_state.get("last_user_sessions") or [], key_prefix="me")
     else:
-        with st.expander("手动按 user_id 查询会话", expanded=False):
-            manual_user_id_sb = st.number_input(
-                "user_id",
-                min_value=1,
-                step=1,
-                value=1,
-                key="sidebar_manual_user_id",
-            )
-            if st.button("查询", key="sidebar_btn_list_sessions_manual"):
-                try:
-                    r = httpx.get(
-                        f"{api_base.rstrip('/')}/session/list",
-                        params={"user_id": int(manual_user_id_sb)},
-                        timeout=10.0,
-                    )
-                    r.raise_for_status()
-                    data = r.json()
-                    sessions = ((data.get("data") or {}).get("sessions")) or []
-                    st.session_state["last_user_sessions"] = sessions
-                    st.success(f"共 {len(sessions)} 个会话")
-                    with st.expander("响应 JSON", expanded=False):
-                        st.json(data)
-                except httpx.HTTPStatusError as e:
-                    st.error(f"查询失败 {e.response.status_code}: {_short_text(e.response.text, 200)}")
-                except Exception as e:
-                    st.error(_short_exc(e))
-        nm = st.session_state.get("last_user_sessions") or []
-        if nm:
-            st.divider()
-            st.markdown("##### 会话列表")
-            _render_session_list_buttons(nm, key_prefix="nm")
+        st.caption("登录后可查看并切换您的会话列表。")
 
 # 主区顶部
 sid_for_display = session_id.strip() or st.session_state.get("session_id", "") or ""
@@ -380,6 +369,7 @@ with col_stream:
                 "POST",
                 f"{api_base.rstrip('/')}{endpoint}",
                 json=req_json,
+                headers=_auth_headers(),
                 timeout=timeout_seconds,
             ) as resp:
                 resp.raise_for_status()
@@ -475,6 +465,7 @@ with col_tools:
                                 f"{api_base.rstrip('/')}/session/upload-excel",
                                 files={"file": (fname, raw, mime)},
                                 data={"session_id": session_id},
+                                headers=_auth_headers(),
                                 timeout=120.0,
                             )
                             r.raise_for_status()
@@ -507,6 +498,7 @@ with col_tools:
                         r = httpx.get(
                             f"{api_base.rstrip('/')}/session/workspace-tree",
                             params={"session_id": session_id},
+                            headers=_auth_headers(),
                             timeout=30.0,
                         )
                         r.raise_for_status()

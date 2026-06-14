@@ -13,6 +13,7 @@ from backend.analysis_stream import (
     reconnect_streaming_task_generator,
 )
 from backend.api_models import StreamingTaskRequest
+from backend.session_auth import assert_session_owner
 from db.session_store import SessionStore
 from utils.workspace_manager import (
     init_workspace,
@@ -20,7 +21,9 @@ from utils.workspace_manager import (
     build_workspace_tree,
     build_workspace_files_payload,
 )
+from utils.workspace_file_ops import write_bytes_file
 from utils.session_memory import persist_workspace_snapshot
+from sandbox.config import is_sandbox_enabled
 from configs.config import LANGUAGE
 
 MAX_FILE_SIZE = 2048 * 1024 * 1024  # 最大文件大小（2048M，与Nginx配置一致）
@@ -40,6 +43,7 @@ def build_health_response() -> JSONResponse:
 async def handle_session_upload_excel(
     file: UploadFile,
     session_id: str,
+    current_user_id: int,
 ) -> JSONResponse:
     """
     上传文件到会话工作区（表格 / 图片 / 文本，与 Reader 分类一致）。
@@ -47,11 +51,7 @@ async def handle_session_upload_excel(
     """
     if not session_id.strip():
         raise HTTPException(status_code=400, detail="session_id 不能为空")
-    session_user, err = SessionStore.get_session_user(session_id)
-    if err:
-        raise HTTPException(status_code=500, detail=f"查询会话失败: {err}")
-    if not session_user:
-        raise HTTPException(status_code=404, detail="session_id 不存在，请先创建会话")
+    session_user = assert_session_owner(session_id, current_user_id)
 
     original_filename = file.filename or ""
     ext = os.path.splitext(original_filename)[1].lower()
@@ -72,15 +72,32 @@ async def handle_session_upload_excel(
             )
     await file.seek(0)
 
+    if is_sandbox_enabled():
+        try:
+            from sandbox.session_manager import ensure_sandbox
+
+            ensure_sandbox(session_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"沙箱不可用: {e}")
+
     workspace_abs = str(session_user.get("workspace_abs_path") or "").strip() or init_workspace(session_id)
     os.makedirs(workspace_abs, exist_ok=True)
     # 统一数据文件命名：data.xxx / data_1.xxx / data_2.xxx ...
     safe_name = generate_data_filename(workspace_abs, file.filename or "")
-    save_path = os.path.join(workspace_abs, safe_name)
     try:
-        with open(save_path, "wb") as f:
-            while chunk := await file.read(1024 * 1024):
-                f.write(chunk)
+        chunks: list[bytes] = []
+        while chunk := await file.read(1024 * 1024):
+            chunks.append(chunk)
+        file_data = b"".join(chunks)
+        if is_sandbox_enabled():
+            if not write_bytes_file(session_id, safe_name, file_data):
+                raise HTTPException(status_code=500, detail="保存文件到沙箱失败")
+        else:
+            save_path = os.path.join(workspace_abs, safe_name)
+            with open(save_path, "wb") as f:
+                f.write(file_data)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"保存文件失败: {e}")
 
@@ -108,15 +125,11 @@ async def handle_session_upload_excel(
     )
 
 
-def build_session_snapshot_response(session_id: str) -> JSONResponse:
+def build_session_snapshot_response(session_id: str, current_user_id: int) -> JSONResponse:
     """
     会话快照：前端首次加载或断线重连时调用，返回该会话的「完整累计内容」和当前「版本号」。
     """
-    session_user, err = SessionStore.get_session_user(session_id)
-    if err:
-        raise HTTPException(status_code=500, detail=f"查询会话失败: {err}")
-    if not session_user:
-        raise HTTPException(status_code=404, detail="session_id 不存在，请先创建会话")
+    assert_session_owner(session_id, current_user_id)
     try:
         content, version = SessionStore.get_latest_content(session_id)
     except Exception:
@@ -127,16 +140,12 @@ def build_session_snapshot_response(session_id: str) -> JSONResponse:
     )
 
 
-def build_run_analysis_response(body: StreamingTaskRequest) -> StreamingResponse:
+def build_run_analysis_response(body: StreamingTaskRequest, current_user_id: int) -> StreamingResponse:
     """
     流式分析任务：绑定 session_id，加载工作区上下文，执行完整分析链路；
     后端每产生新片段先更新「完整内容」+ 版本号，再 SSE 推送给前端。
     """
-    session_user, err = SessionStore.get_session_user(body.session_id)
-    if err:
-        raise HTTPException(status_code=500, detail=f"查询会话失败: {err}")
-    if not session_user:
-        raise HTTPException(status_code=404, detail="session_id 不存在，请先创建会话")
+    assert_session_owner(body.session_id, current_user_id)
     # 在流水线事件之前持久化用户原始输入，便于快照回放时还原完整对话。
     ok, _, err = SessionStore.append_content(
         body.session_id,
@@ -165,19 +174,13 @@ def build_run_analysis_response(body: StreamingTaskRequest) -> StreamingResponse
         raise HTTPException(status_code=500, detail=f"启动分析任务失败: {str(e)}")
 
 
-def build_reconnect_analysis_response(session_id: str) -> StreamingResponse:
+def build_reconnect_analysis_response(session_id: str, current_user_id: int) -> StreamingResponse:
     """
     断线恢复流：
     先把 session 的当前锁存快照推给前端，再在分析未结束时继续推送后续事件。
     """
     sid = session_id.strip()
-    if not sid:
-        raise HTTPException(status_code=400, detail="session_id 不能为空")
-    session_user, err = SessionStore.get_session_user(sid)
-    if err:
-        raise HTTPException(status_code=500, detail=f"查询会话失败: {err}")
-    if not session_user:
-        raise HTTPException(status_code=404, detail="session_id 不存在，请先创建会话")
+    assert_session_owner(sid, current_user_id)
     try:
         return StreamingResponse(
             reconnect_streaming_task_generator(sid),
@@ -208,6 +211,14 @@ def build_create_session_response(user_id: int) -> JSONResponse:
     ok, err = SessionStore.create_session(session_id, user_id, workspace_abs)
     if not ok:
         raise HTTPException(status_code=500, detail=f"创建会话失败: {err or 'unknown error'}")
+
+    if is_sandbox_enabled():
+        try:
+            from sandbox.session_manager import ensure_sandbox
+
+            ensure_sandbox(session_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"创建沙箱失败: {e}")
 
     try:
         persist_workspace_snapshot(
@@ -262,7 +273,11 @@ def build_user_sessions_response(user_id: int) -> JSONResponse:
     )
 
 
-def build_save_session_title_response(session_id: str, title: str) -> JSONResponse:
+def build_save_session_title_response(
+    session_id: str,
+    title: str,
+    current_user_id: int,
+) -> JSONResponse:
     """
     保存会话标题：如果已有非空标题则不重复写入；仅首次写入有效。
     """
@@ -273,11 +288,7 @@ def build_save_session_title_response(session_id: str, title: str) -> JSONRespon
     if not clean_title:
         raise HTTPException(status_code=400, detail="title 不能为空")
 
-    session_user, err = SessionStore.get_session_user(sid)
-    if err:
-        raise HTTPException(status_code=500, detail=f"查询会话失败: {err}")
-    if not session_user:
-        raise HTTPException(status_code=404, detail="session_id 不存在，请先创建会话")
+    assert_session_owner(sid, current_user_id)
 
     ok, saved, err = SessionStore.save_session_title_if_absent(sid, clean_title)
     if not ok:
@@ -309,19 +320,12 @@ def build_save_session_title_response(session_id: str, title: str) -> JSONRespon
     )
 
 
-def build_session_workspace_tree_response(session_id: str) -> JSONResponse:
+def build_session_workspace_tree_response(session_id: str, current_user_id: int) -> JSONResponse:
     """
     查询会话工作区目录树：返回该 session_id 对应工作区下的完整层级结构。
     """
     sid = session_id.strip()
-    if not sid:
-        raise HTTPException(status_code=400, detail="session_id 不能为空")
-
-    session_user, err = SessionStore.get_session_user(sid)
-    if err:
-        raise HTTPException(status_code=500, detail=f"查询会话失败: {err}")
-    if not session_user:
-        raise HTTPException(status_code=404, detail="session_id 不存在，请先创建会话")
+    session_user = assert_session_owner(sid, current_user_id)
 
     workspace_abs = str(session_user.get("workspace_abs_path") or "").strip()
     if not workspace_abs:
@@ -347,6 +351,14 @@ def build_session_workspace_tree_response(session_id: str) -> JSONResponse:
             },
             status_code=200,
         )
+
+    if is_sandbox_enabled():
+        try:
+            from sandbox.files import sync_to_local
+
+            sync_to_local(sid)
+        except Exception:
+            pass
 
     try:
         tree = build_workspace_tree(workspace_abs)

@@ -37,6 +37,7 @@ from configs.config import (
     MAX_SUPERVISOR_INVOCATIONS,
     OPENAI_COMPATIBLE_API_BASE,
 )
+from sandbox.config import is_sandbox_enabled
 from db.session_store import SessionStore
 from utils.workspace_manager import list_workspace_files, resolve_workspace_root
 from utils.model_logger import log_phase_end, log_phase_start
@@ -192,6 +193,13 @@ def _build_planner_summary(plan_data: Dict[str, Any], input_data: str) -> str:
 def _build_workspace_context(session_id: str) -> Dict[str, Any]:
     # 只注入对生成代码有价值的上下文，减少提示词冗余。
     ctx: Dict[str, Any] = {}
+    if is_sandbox_enabled():
+        try:
+            from sandbox.files import sync_to_local
+
+            sync_to_local(session_id)
+        except Exception:
+            logger.exception("sync sandbox to local failed: session_id=%s", session_id)
     root = resolve_workspace_root(session_id)
     if root:
         ctx["file_list"] = list_workspace_files(session_id)
@@ -881,6 +889,13 @@ async def run_orchestrated_analysis_stream(
                     "terminal_event": terminal_event,
                 },
             )
+            if is_sandbox_enabled():
+                try:
+                    from sandbox.session_manager import pause_sandbox
+
+                    pause_sandbox(session_id)
+                except Exception:
+                    logger.exception("pause sandbox after pipeline failed: session_id=%s", session_id)
             # 终态事件与普通阶段事件统一走队列转发，避免依赖函数尾部二次 yield。
             if terminal_event is not None:
                 await _emit_pipeline_event(session_id, q, terminal_event)

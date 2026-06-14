@@ -165,14 +165,38 @@ def build_login_with_sms_response(phone: str, code: str) -> JSONResponse:
     # 验证码一次性消费，防止重复使用。
     _PHONE_CODE_CACHE.pop(phone, None)
 
+    from backend.jwt_auth import create_access_token
+
+    user_id = int(user.get("id") or 0)
+    username = str(user.get("username") or "")
+    access_token, expires_in = create_access_token(user_id, username, phone)
+
     return JSONResponse(
         content={
             "code": 0,
             "msg": "login success",
             "data": {
-                "user_id": user.get("id"),
-                "username": user.get("username"),
+                "access_token": access_token,
+                "token_type": "bearer",
+                "expires_in": expires_in,
+                "user_id": user_id,
+                "username": username,
                 "phone": user.get("phone"),
+            },
+        },
+        status_code=200,
+    )
+
+
+def build_me_response(user_id: int, username: str, phone: str) -> JSONResponse:
+    return JSONResponse(
+        content={
+            "code": 0,
+            "msg": "ok",
+            "data": {
+                "user_id": user_id,
+                "username": username,
+                "phone": phone,
             },
         },
         status_code=200,

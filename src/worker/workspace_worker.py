@@ -1,9 +1,12 @@
 # worker/workspace_worker.py
 # 在工作区内调度并执行代码：根据 Planner 的模式（单文件/多文件）执行，cwd 设为工作区根目录。
+# 启用 Cube Sandbox 时在隔离 MicroVM 内执行。
 
 import os
 import subprocess
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
+
+from sandbox.config import is_sandbox_enabled
 from utils.workspace_manager import resolve_workspace_root, to_absolute_path
 
 
@@ -16,6 +19,20 @@ def run_python_in_workspace(
     在工作区根目录下执行单个 Python 文件。
     :return: { "relative_path", "stdout", "stderr", "returncode", "success" }
     """
+    if is_sandbox_enabled():
+        try:
+            from sandbox.worker import run_python_in_sandbox
+
+            return run_python_in_sandbox(session_id, relative_path, timeout=timeout)
+        except Exception as e:
+            return {
+                "relative_path": relative_path,
+                "stdout": "",
+                "stderr": str(e),
+                "returncode": -1,
+                "success": False,
+            }
+
     root = resolve_workspace_root(session_id)
     if not root:
         return {
@@ -81,6 +98,19 @@ def run_workspace_tasks(
     :param timeout_per_file: 每个文件执行超时（秒）
     :return: { "success", "results": [ run_python_in_workspace 的返回值, ... ], "logs", "error_messages" }
     """
+    if is_sandbox_enabled():
+        try:
+            from sandbox.session_manager import ensure_sandbox
+
+            ensure_sandbox(session_id)
+        except Exception as e:
+            return {
+                "success": False,
+                "results": [],
+                "logs": "",
+                "error_messages": [str(e)],
+            }
+
     results = []
     logs = []
     errors = []
