@@ -7,7 +7,7 @@
 - **每个 session 一个沙箱**：创建会话时 `Sandbox.create(template=...)`，后续上传、Coder 写码、Worker 执行均在同一 MicroVM 内完成。
 - **沙箱为真实存储**：上传文件与生成代码通过 `sandbox.files.write()` 写入沙箱；Worker 通过 `sandbox.commands.run("python3 main.py")` 执行。
 - **本地目录为镜像**：`tmp/workspaces/<session_id>/` 仍保留，用于 Reader（pandas/Vision）与 `/session/workspace-tree` API；流水线在读取前会从沙箱 **sync** 到本地。
-- **分析结束后 pause**：一轮 `run-analysis` 结束后调用 `sandbox.beta_pause()` 释放 VM；下次同一 session 会通过 `Sandbox.connect(sandbox_id)` 恢复。
+- **分析结束后 pause**：一轮 `run-analysis` 结束后调用 `pause_sandbox(session_id)`（内部 `sandbox.beta_pause()`）释放 VM；下次同一 session 会通过 `Sandbox.connect(sandbox_id)` 恢复。
 
 `sandbox_id` 持久化在 `{workspace}/.cube_sandbox_meta.json`，无需改 MySQL 表结构。
 
@@ -46,6 +46,37 @@ export CUBE_SANDBOX_ENABLED=0
 ```
 
 行为与改造前一致：文件写入 `tmp/workspaces/`，Worker 使用宿主机 `python3`。
+
+## 端到端操作清单（验收）
+
+按顺序完成以下步骤，确认集成可用：
+
+1. **部署 Cube Sandbox** — 见 [Cubesandbox-deploy.md](./Cubesandbox-deploy.md)，控制面 `curl --noproxy '*' http://127.0.0.1:3000/health` 返回正常。
+2. **制作模板** — `cubemastercli tpl create-from-image ...`，`tpl watch` 至 `READY`，记录 `template_id`。
+3. **配置并启动 AgentPlatform** — 项目根 [`.env.example`](../.env.example) → `.env`，按 [StartInstruction.md](./StartInstruction.md) 启动后端（`unset` 代理）。
+4. **创建会话并上传** — `POST /session/create` → `POST /session/upload-excel` 上传表格文件。
+5. **发起分析** — `POST /run-analysis`，观察 SSE 流。
+6. **验收标准**：
+   - SSE 中 `type=worker` 事件 `success: true`
+   - 沙箱内可见 `main.py` 与上传的数据文件（如 `data.xlsx`）
+   - `/session/workspace-tree` 返回的镜像目录与沙箱内容一致
+
+## 测试
+
+单元 / 集成测试（默认不连 live 沙箱）：
+
+```bash
+pytest tests/test_sandbox_integration.py
+```
+
+连接真实 Cube Sandbox 的 live 测试：
+
+```bash
+export RUN_CUBE_SANDBOX_INTEGRATION=1
+export CUBE_SANDBOX_ENABLED=1
+# 并配置 E2B_API_URL、CUBE_TEMPLATE_ID 等
+pytest tests/test_sandbox_integration.py -k live
+```
 
 ## 常见问题
 

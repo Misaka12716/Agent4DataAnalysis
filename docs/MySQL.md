@@ -203,6 +203,8 @@ sudo docker exec -it mysql8-agent mysql -u root -p -e "SHOW DATABASES;"
   - `SESSION_CONTENT_TABLE_DDL`
 - 运行时配置读取：`src/utils/config.py`
 
+Cube Sandbox 与工作区镜像语义见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md)。
+
 请确保代码配置与容器参数一致：
 
 - `MYSQL_HOST=localhost`
@@ -337,6 +339,12 @@ password_hash=$2b$12$...
 - `workspace_abs_path`：`VARCHAR(512)`，会话工作区绝对路径
 - `created_at` / `updated_at`：`TIMESTAMP`
 
+`workspace_abs_path` 语义说明：
+
+- **启用 Cube Sandbox 时**：本地**镜像目录**路径（Reader / workspace-tree 等读取此路径）；真实文件存储在沙箱 MicroVM 内。
+- 沙箱元数据（含 `sandbox_id`）位于镜像目录下的 `.cube_sandbox_meta.json`，**不入库**。
+- `CUBE_SANDBOX_ENABLED=0` 时：即为实际工作区目录路径。
+
 示例（逻辑）：
 
 ```text
@@ -344,6 +352,7 @@ session_id=1d9c5c6e-3b2a-4c49-8e4f-5f0c6f91c9d2
 user_id=0
 title=Q1 销售数据分析
 workspace_abs_path=/data1/pjw/AgentPlatform/tmp/workspaces/1d9c5c6e-3b2a-4c49-8e4f-5f0c6f91c9d2
+# 同目录下 .cube_sandbox_meta.json 含 sandbox_id（不入库）
 ```
 
 ### 9.3 `session_content`（会话流式内容版本表）

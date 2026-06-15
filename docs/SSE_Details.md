@@ -46,6 +46,8 @@ data: <json-string>
 
 `/run-analysis` -> `streaming_task_generator` -> `run_orchestrated_analysis_stream` -> LangGraph 各节点产出事件 -> 队列转发 -> SSE 输出。
 
+流水线开始前，`_build_workspace_context` 会 `sync_to_local` 将沙箱内容同步到本地镜像（供 Reader 等读取）；流水线结束后调用 `pause_sandbox` 暂停沙箱。
+
 ### 3.2 编排层事件来源
 
 `src/orchestrator/analysis_pipeline_graph.py` 中实际产出的主要事件：
@@ -132,7 +134,7 @@ data: <json-string>
 }
 ```
 
-用途：返回工作区执行结果，供前端展示和后续编排判断。
+用途：返回**沙箱内** Python 执行结果（`sandbox.commands.run`）；`CUBE_SANDBOX_ENABLED=0` 时回退宿主机 subprocess。供前端展示和后续编排判断。
 
 ### 4.5 report_chunk
 
@@ -231,6 +233,7 @@ data: <json-string>
 - 建议保留原始事件列表，便于排查 Supervisor 路由和失败回溯
 - 若部署在反向代理后，确保禁用响应缓冲（当前已设置 `X-Accel-Buffering: no`，代理侧也需对应配置）
 - 长链接场景下可配合 `/session/snapshot` 做断线重连恢复
+- Cube Sandbox 与 `sync_to_local` / `pause_sandbox` 语义见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md)
 
 ## 9. 一次完整流的典型事件顺序（示例）
 

@@ -35,14 +35,23 @@ Cube Sandbox 最基础的使用方式：创建沙箱、在其中运行 Python �
 
 ## 2. 前置条件
 
-- 已部署的 Cube Sandbox 环境
+### 独立 SDK 示例（本节下文）
+
+- 已部署的 Cube Sandbox 环境（见 [Cubesandbox-deploy.md](./Cubesandbox-deploy.md)）
 - Python 3.8+
+- 示例目录内 `pip install -r requirements.txt`（若使用 `tests/cubesandbox` 等本地示例）
+
+### AgentPlatform 集成
+
+- 同上，另需配置项目根目录 [`.env.example`](../.env.example) 中的 `CUBE_SANDBOX_ENABLED`、`E2B_API_URL`、`CUBE_TEMPLATE_ID` 等
+- 启动与验收见 [StartInstruction.md](./StartInstruction.md) 与 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md)
 
 ```bash
 pip install -r requirements.txt
 ```
 
 示例脚本会使用 `python-dotenv` 尝试自动加载当前目录或脚本所在目录中的 `.env`；
+**AgentPlatform 后端**应使用项目根目录的 `.env`（或启动前 `export`），而非 `tests/cubesandbox` 下的本地示例 `.env`。
 如果文件不存在，则继续使用当前进程环境变量，不会因为缺少 `.env` 直接报错。
 
 ## 3. 快速开始
@@ -63,6 +72,10 @@ cubemastercli tpl create-from-image \
 记录输出的 `template_id`。
 
 ### 第二步 — 配置环境变量
+
+**AgentPlatform 集成**：使用项目根目录 [`.env.example`](../.env.example)，复制为 `.env` 并填写 `CUBE_TEMPLATE_ID` 等，详见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md)。
+
+**独立 SDK 示例**：
 
 ```bash
 cp .env.example .env

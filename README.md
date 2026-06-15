@@ -14,8 +14,9 @@
 
 ## 功能概览
 
-- 会话级工作区：每个 `session_id` 对应独立工作目录（位于 `TEMP_FOLDER/workspaces/<session_id>`）。
-- 文件上传：支持将 `xlsx/xls/csv` 上传到会话工作区根目录，并按 `data.xxx`、`data_1.xxx` 规则命名。
+- 会话级工作区：每个 `session_id` 对应独立 **Cube Sandbox MicroVM**；真实文件存储在沙箱内，本地 `TEMP_FOLDER/workspaces/<session_id>` 为**镜像目录**（供 Reader / workspace-tree 等读取）。
+- 代码执行：Worker 在沙箱内通过 `commands.run` 执行 Python；`CUBE_SANDBOX_ENABLED=0` 时可回退宿主机 subprocess。
+- 文件上传：支持将 `xlsx/xls/csv` 等写入沙箱工作区根目录，并按 `data.xxx`、`data_1.xxx` 规则命名，再同步到本地镜像。
 - 任务流式分析：后端通过 SSE 持续推送编排决策、各阶段事件与报告片段；每条有效负载会先写入 MySQL 会话内容（累计全文 + 版本号），再推送给客户端。
 - 断线重连：可通过快照接口拉取当前累计内容与版本号。
 - 最简测试前端：内置 Streamlit 页面用于联调上传/快照/流式分析接口。
@@ -36,10 +37,11 @@ AgentPlatform/
 │   ├── orchestrator/           # LangGraph 顶层编排（Supervisor + 子图节点）
 │   ├── planner/                # 规划器（含工作区上下文）
 │   ├── coder/                  # 代码生成与失败修正写入
-│   ├── worker/                 # 工作区内代码执行
+│   ├── worker/                 # 沙箱内代码执行（可回退 subprocess）
+│   ├── sandbox/                # Cube Sandbox 会话、文件、Worker 封装
 │   ├── reporter/               # 报告生成（流式 chunk）
 │   ├── db/                     # 会话与数据库模型
-│   ├── utils/                  # MySQL、工作区管理等工具
+│   ├── utils/                  # MySQL、工作区镜像与文件操作等工具
 │   └── configs/                # 提示词等配置
 ├── requirements.txt
 └── README.md
@@ -95,8 +97,19 @@ python -m ipykernel install --user --name agentPlatform --display-name "Python (
   - `MYSQL_PORT`（支持环境变量）
   - `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DB`
 - 工作区与临时路径：
-  - `TEMP_FOLDER`：会话工作区位于 `TEMP_FOLDER/workspaces`
+  - `TEMP_FOLDER`：本地镜像位于 `TEMP_FOLDER/workspaces/<session_id>`（内容与沙箱一致）
   - 仓库内 `PATH` 等路径为开发机示例，部署到新环境时请改为本机实际路径
+- Cube Sandbox（默认启用，见 [`.env.example`](.env.example)）：
+
+| 环境变量 | 说明 | 示例 |
+|----------|------|------|
+| `CUBE_SANDBOX_ENABLED` | `1` 启用沙箱；`0` 回退本地 subprocess | `1` |
+| `E2B_API_URL` | Cube API 地址 | `http://127.0.0.1:3000` |
+| `E2B_API_KEY` | API Key | `e2b_000000` |
+| `CUBE_TEMPLATE_ID` | 沙箱模板 ID | `tpl-78c1861fc2b54381947d33e2` |
+| `SANDBOX_WORKDIR` | 沙箱内工作目录 | `/home/user` |
+| `SANDBOX_TIMEOUT` | 沙箱命令超时（秒） | `600` |
+| `SSL_CERT_FILE` | 可选，HTTPS 自签证书 | — |
 
 > 注意：当前仓库中的默认数据库账号密码仅适用于本地开发示例，生产环境请务必改为安全配置。
 
@@ -143,12 +156,16 @@ CREATE TABLE IF NOT EXISTS session_content (
 
 ### 1) 启动后端（FastAPI）
 
+**前置**：Cube Sandbox 已部署（见 [`docs/Cubesandbox-deploy.md`](docs/Cubesandbox-deploy.md)），并配置 [`.env.example`](.env.example) 中的 E2B 相关变量。完整步骤见 [`docs/StartInstruction.md`](docs/StartInstruction.md)。
+
 在项目根目录执行：
 
 ```bash
 cd src
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 # 生产环境务必设置 JWT 签名密钥
 export JWT_SECRET_KEY="your-production-secret"
+# 若未使用 .env，在此 export CUBE_SANDBOX_ENABLED、E2B_API_URL 等
 uvicorn backend.server:app --host 0.0.0.0 --port 52716
 ```
 
@@ -213,13 +230,15 @@ streamlit run frontend/frontend.py
 
 ## 工作机制（与代码一致）
 
-1. **上传**：前端将表格 / 图片 / 文本写入会话工作区；Reader 按类型生成 digest（图片可走 Vision 多模态），Planner 侧会列举工作区文件并读取结构样例，作为规划上下文。
-2. **Supervisor**：每次子阶段结束后回到 Supervisor，由结构化 LLM 决策下一步（`planner` / `coder` / `worker` / `reporter` / `finish`）；非法跳步会被代码侧「钳制」为合法路由（例如无有效规划时不能进 Coder，未执行 Worker 时不能进 Reporter）。
-3. **Planner**：产出包含「需求解析」「步骤分解」等字段的规划；无效规划会触发重试直至上限。
-4. **Coder**：首次生成并写入工作区代码（默认 `main.py`）；若上一轮 Worker 失败且未超修正次数，则走「修正写入」路径，并附带 stderr 等错误摘要。
-5. **Worker**：在工作区按配置的执行模式运行指定脚本，汇总各文件 `stdout/stderr` 与成功标志。
-6. **Reporter**：根据规划摘要与 Worker 结果流式输出报告片段。
-7. **持久化与 SSE**：`streaming_task_generator` 在消费编排流时，将每个 JSON 片段先 `append` 到会话内容表，再作为 SSE `data:` 行推送；正常结束会追加 `streaming_ended`；异常为 `streaming_error` 等。
+1. **创建会话**：`POST /session/create` 初始化本地镜像目录，并调用 `ensure_sandbox(session_id)` 创建/绑定 Cube Sandbox；`sandbox_id` 写入镜像目录下的 `.cube_sandbox_meta.json`（不入库）。
+2. **上传**：文件经 `files.write` 写入沙箱，再 `sync_to_local` 更新镜像；Reader 按类型生成 digest（图片可走 Vision 多模态），Planner 侧列举工作区文件并读取结构样例。
+3. **Supervisor**：每次子阶段结束后回到 Supervisor，由结构化 LLM 决策下一步（`planner` / `coder` / `worker` / `reporter` / `finish`）；非法跳步会被代码侧「钳制」为合法路由。
+4. **Planner**：产出包含「需求解析」「步骤分解」等字段的规划；无效规划会触发重试直至上限。
+5. **Coder**：首次生成并写入沙箱代码（默认 `main.py`）；Worker 失败且未超修正次数时走「修正写入」路径，并附带 stderr 等错误摘要。
+6. **Worker**：在沙箱内通过 `commands.run` 执行 Python（`CUBE_SANDBOX_ENABLED=0` 时回退宿主机 subprocess），汇总 `stdout/stderr` 与成功标志。
+7. **Reader / workspace-tree**：读取镜像前会先 `sync_to_local`，保证与沙箱内容一致。
+8. **Reporter**：根据规划摘要与 Worker 结果流式输出报告片段。
+9. **流水线结束**：调用 `pause_sandbox` 暂停沙箱；SSE 持久化逻辑不变——每个 JSON 片段先写入 MySQL，再推送客户端。
 
 ### SSE 中常见的 `type` 字段（便于联调）
 
@@ -258,11 +277,26 @@ streamlit run frontend/frontend.py
 - 查看 SSE 中 `type=orchestrator` 的路由与 `reason`，确认是规划无效、代码未写入还是 Worker 报错。
 - 适当调大或检查环境变量中的 `MAX_*` 上限；仍失败时请结合 Worker 的 stderr 与模型能力排查。
 
+### 5) Cube API 不可达或创建沙箱失败
+
+- 确认 Cube Sandbox 控制面已启动：`curl --noproxy '*' http://127.0.0.1:3000/health`。
+- 检查 `E2B_API_URL`、`E2B_API_KEY` 是否与部署一致。
+- 启动后端前 `unset http_proxy https_proxy`，避免 SDK 经代理返回 502。
+
+### 6) 模板 ID 错误或 Worker 沙箱执行失败
+
+- 确认 `CUBE_TEMPLATE_ID` 与 `cubemastercli tpl watch` 输出的 READY 模板一致。
+- 模板内需包含 Python 3 及分析所需依赖；Worker stderr 会经 SSE 返回。
+- 本地联调可设 `CUBE_SANDBOX_ENABLED=0` 验证非沙箱路径是否正常。
+
 ---
 
 ## 相关文档
 
 - 启动说明：[`docs/StartInstruction.md`](docs/StartInstruction.md)
+- Cube Sandbox 部署：[`docs/Cubesandbox-deploy.md`](docs/Cubesandbox-deploy.md)
+- AgentPlatform 沙箱集成：[`docs/Cubesandbox-agent-integration.md`](docs/Cubesandbox-agent-integration.md)
+- Cube Sandbox 使用说明：[`docs/Cubesandbox-using.md`](docs/Cubesandbox-using.md)
 - 大模型部署与配置：[`docs/Models.md`](docs/Models.md)
 - 后端接口说明：[`docs/BackendAPI.md`](docs/BackendAPI.md)
 - SSE 详细说明：[`docs/SSE_Details.md`](docs/SSE_Details.md)

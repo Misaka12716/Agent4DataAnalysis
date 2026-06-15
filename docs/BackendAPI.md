@@ -223,7 +223,7 @@
   - `msg: str`
   - `data.session_id: str`
   - `data.user_id: int`
-  - `data.workspace_abs_path: str`
+  - `data.workspace_abs_path: str`（**本地镜像路径**）
 - 成功返回示例（`200`）：
 ```json
 {
@@ -238,12 +238,13 @@
 ```
 - 常见错误：
   - `401`：`code=6`，未登录或 token 无效/过期
-  - `500`：数据库写入失败
+  - `500`：数据库写入失败；或启用 Cube Sandbox 时 `ensure_sandbox` 失败（`创建沙箱失败`）
 - 实现逻辑：
   1. 从 Bearer Token 解析当前 `user_id`。
-  2. 生成 UUID 作为 `session_id`，初始化会话工作区目录。
-  3. 写入 `session_user(session_id, user_id, workspace_abs_path)`。
-  4. 返回 `session_id`，后续请求只需传该值（且须属于当前用户）。
+  2. 生成 UUID 作为 `session_id`，初始化本地镜像目录（`init_workspace`）。
+  3. 若 `CUBE_SANDBOX_ENABLED=1`，调用 `ensure_sandbox(session_id)` 创建/绑定 Cube Sandbox；`sandbox_id` 写入镜像目录 `.cube_sandbox_meta.json`（不入库）。
+  4. 写入 `session_user(session_id, user_id, workspace_abs_path)`；`workspace_abs_path` 为**本地镜像路径**。
+  5. 返回 `session_id`，后续请求只需传该值（且须属于当前用户）。
 
 ---
 
@@ -372,7 +373,7 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
   - `relative_path: str`
   - `original_filename: str`
   - `file_category: str`（`table` / `image` / `text`）
-  - `workspace_abs_path: str`
+  - `workspace_abs_path: str`（**本地镜像路径**，内容与沙箱一致）
 - 成功返回示例（`200`）：
 ```json
 {
@@ -398,7 +399,8 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
   2. 校验扩展名在 Reader 支持的 table/image/text 白名单内。
   3. 校验文件大小不超过 `MAX_FILE_SIZE`。
   4. 按 `data.xxx`/`data_1.xxx` 递增命名避免重名。
-  5. 将文件写入会话工作区根目录，并刷新 `SESSION_MEMORY.md` 快照。
+  5. 将文件写入沙箱（`write_bytes_file` / `files.write`），再 `sync_to_local` 更新本地镜像，并刷新 `SESSION_MEMORY.md` 快照。
+  6. 响应中的 `workspace_abs_path` 为本地镜像路径（与沙箱内容一致）。
 
 ---
 
@@ -442,7 +444,7 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
   - `status: str`
   - `msg: str`
   - `data.session_id: str`
-  - `data.workspace_abs_path: str`
+  - `data.workspace_abs_path: str`（**本地镜像路径**）
   - `data.tree: object`（目录树节点）
     - 目录节点：`name`、`type=directory`、`relative_path`、`children`
     - 文件节点：`name`、`type=file`、`relative_path`、`size`
@@ -500,10 +502,13 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
   - `500`：会话查询失败、工作区路径缺失、或目录树构建失败
 - 实现逻辑：
   1. 校验 Bearer Token 与 session 归属。
-  2. 读取该会话 `workspace_abs_path`。
-  3. 递归扫描目录，返回目录与文件的层级关系（`tree`）。
-  4. 同时读取所有实际文件并返回内容（`files`；文本为 UTF-8 原文，二进制为 Base64）。
-  5. 若工作区目录不存在，返回空树与空文件列表。
+  2. 若启用 Cube Sandbox，先 `sync_to_local` 将沙箱内容同步到本地镜像。
+  3. 读取该会话 `workspace_abs_path`（本地镜像目录）。
+  4. 递归扫描镜像目录，返回目录与文件的层级关系（`tree`）。
+  5. 同时读取所有实际文件并返回内容（`files`；文本为 UTF-8 原文，二进制为 Base64）。
+  6. 若镜像目录不存在，返回空树与空文件列表。
+
+> 说明：返回的是镜像目录内容，而非直接扫描宿主机上可能过期的旧文件；启用沙箱时以沙箱为真实存储源。
 
 ---
 
@@ -721,3 +726,4 @@ curl http://localhost:52716/health
 - SSE 是持续连接，前端需按流式协议处理 `data:` 行。
 - 会话内容按“完整累计文本”落库，体量较大时可考虑后续改为增量片段存储策略。
 - 短信验证码存储在服务内存中，服务重启后验证码会丢失；如需多实例部署，建议迁移到 Redis 等集中缓存。
+- **Cube Sandbox**：默认启用（`CUBE_SANDBOX_ENABLED=1`）时，会话创建、上传与 workspace-tree 依赖 Cube API（默认 `:3000`）与有效 `CUBE_TEMPLATE_ID`；详见 [`Cubesandbox-agent-integration.md`](Cubesandbox-agent-integration.md) 与 [`StartInstruction.md`](StartInstruction.md)。

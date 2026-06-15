@@ -2,7 +2,7 @@
 
 > **适用场景：** 已有支持 KVM 的 x86_64 Linux 机器（`/dev/kvm` 可用），例如物理机、裸金属服务器、或已开启嵌套虚拟化的云服务器。
 >
-> 如果你用的是**普通云服务器**（`/dev/kvm` 不可用），无需裸金属 —— 通过 PVM 即可在普通云服务器上启用 KVM，请参阅[快速开始](./quickstart.md)。
+> 如果你用的是**普通云服务器**（`/dev/kvm` 不可用），无需裸金属 —— 通过 PVM 即可在普通云服务器上启用 KVM，请参阅 Cube Sandbox 官方文档（本仓库未收录 quickstart 副本）。
 
 ## 前置条件
 
@@ -64,7 +64,7 @@ cubemastercli tpl watch --job-id <job_id>
 
 记录输出中的**模板 ID** (`template_id`)，下一步会用到。
 
-完整的模板创建流程和更多参数说明，请参阅[从 OCI 镜像制作模板](./tutorials/template-from-image.md)。
+更多模板参数说明请参阅 Cube Sandbox 官方文档（本仓库未收录 `tutorials/template-from-image.md`）。
 
 ## 第三步：运行第一段 Agent 代码
 
@@ -105,7 +105,32 @@ with Sandbox.create(template=os.environ["CUBE_TEMPLATE_ID"]) as sandbox:
     print(result)
 ```
 
-更多端到端示例，请参阅[示例项目](./tutorials/examples.md)。
+更多 SDK 端到端示例请参阅 [Cubesandbox-using.md](./Cubesandbox-using.md)。
+
+## 第四步：接入 AgentPlatform
+
+模板就绪后，将 AgentPlatform 后端指向本地 Cube Sandbox：
+
+1. 在项目根目录复制 [`.env.example`](../.env.example) 为 `.env`，填入第二步得到的 `CUBE_TEMPLATE_ID`：
+
+   ```bash
+   CUBE_SANDBOX_ENABLED=1
+   E2B_API_URL=http://127.0.0.1:3000
+   E2B_API_KEY=e2b_000000
+   CUBE_TEMPLATE_ID=<你的模板ID>
+   SANDBOX_WORKDIR=/home/user
+   SANDBOX_TIMEOUT=600
+   ```
+
+2. 启动 AgentPlatform 前确认控制面健康：
+
+   ```bash
+   curl --noproxy '*' http://127.0.0.1:3000/health
+   ```
+
+3. 按 [StartInstruction.md](./StartInstruction.md) 启动后端（建议 `unset http_proxy https_proxy`）。
+
+4. 集成架构、验收清单与排障见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md)。
 
 ## 常见问题
 
@@ -286,9 +311,15 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
   --probe 49999
 ```
 
+### `cubemastercli` 成功但 AgentPlatform Worker 失败
+
+- 确认 AgentPlatform 后端已配置 `E2B_API_URL`、`CUBE_TEMPLATE_ID`（见项目根 [`.env.example`](../.env.example)）。
+- 启动后端前执行 `unset http_proxy https_proxy`，避免 E2B SDK 经代理返回 502。
+- 检查 `CUBE_SANDBOX_ENABLED` 是否为 `1`；Worker stderr 会通过 SSE 返回，详见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md)。
+
 ## 下一步
 
-- [从 OCI 镜像制作模板](./tutorials/template-from-image.md) — 自定义沙箱运行环境
-- [多机集群部署](./multi-node-deploy.md) — 扩展到多台机器
-- [HTTPS 证书与域名解析](./https-and-domain.md) — TLS 配置选项
-- [鉴权](./authentication.md) — 启用 API 鉴权
+- [Cubesandbox-using.md](./Cubesandbox-using.md) — SDK 快速入门与示例脚本
+- [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md) — AgentPlatform 沙箱集成与验收
+- [StartInstruction.md](./StartInstruction.md) — 启动 AgentPlatform 后端
+- [BackendAPI.md](./BackendAPI.md) — 会话、上传与流式分析 API

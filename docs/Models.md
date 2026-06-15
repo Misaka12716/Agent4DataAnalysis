@@ -106,6 +106,7 @@ curl -s http://192.168.4.110:12716/v1/chat/completions \
 | **Reader Vision**（图片理解） | `qwen3.6:27b` | `DEFAULT_VISION_MODEL`，需支持 `image_url` 多模态 |
 | **Reporter**（最终报告） | `qwen3.6:27b` | 使用 `DEFAULT_MODEL` |
 | **Reader 表头 LLM**（可选） | `qwen3.6:27b` | 仅当 `READER_ENABLE_LLM_TABLE_HEADER=1` |
+| **Worker 执行** | 不调用 LLM | Cube Sandbox 内执行用户代码；与 Coder 模型无关，但依赖沙箱模板中的 Python 环境（见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md)） |
 
 ### 3.1 代码中的调用点
 
@@ -116,8 +117,9 @@ curl -s http://192.168.4.110:12716/v1/chat/completions \
 | Orchestrator Supervisor | `src/orchestrator/analysis_pipeline_graph.py` | `DEFAULT_ORCHESTRATOR_MODEL` |
 | Reader 摘要 | `src/reader/nodes/synthesize.py` | `DEFAULT_READER_MODEL` |
 | Reader 图片 | `src/reader/handlers/image.py` | `DEFAULT_VISION_MODEL` |
-| Reader 表头（可选） | `src/reader/handlers/table.py` | `DEFAULT_MODEL` |
+| Reader 表头 LLM | `src/reader/handlers/table.py` | `DEFAULT_MODEL` |
 | Reporter | `src/reporter/report_agent.py` | `DEFAULT_MODEL` |
+| Worker 执行 | `src/worker/workspace_worker.py` | 不调用 LLM；Cube Sandbox 内执行用户代码（`sandbox.commands.run`），依赖沙箱模板中的 Python 环境，见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md) |
 
 ### 3.2 Supervisor 与 Qwen 系列的兼容性
 
