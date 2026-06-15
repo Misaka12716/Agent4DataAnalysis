@@ -91,7 +91,13 @@ async def handle_session_upload_excel(
         file_data = b"".join(chunks)
         if is_sandbox_enabled():
             if not write_bytes_file(session_id, safe_name, file_data):
-                raise HTTPException(status_code=500, detail="保存文件到沙箱失败")
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "保存文件失败：沙箱数据面不可用且本地镜像写入也失败。"
+                        "请检查 cube-sandbox-cube-proxy.service 或设置 CUBE_SANDBOX_ENABLED=0。"
+                    ),
+                )
         else:
             save_path = os.path.join(workspace_abs, safe_name)
             with open(save_path, "wb") as f:

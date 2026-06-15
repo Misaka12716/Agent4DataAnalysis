@@ -34,6 +34,16 @@ for _proxy_key in (
 os.environ.setdefault("E2B_API_URL", E2B_API_URL)
 os.environ.setdefault("E2B_API_KEY", E2B_API_KEY)
 
+# 本地 Cube Sandbox 使用 mkcert HTTPS 连接 envd 时需要 CA 证书。
+for _ssl_cert in (
+    os.getenv("SSL_CERT_FILE"),
+    "/root/.local/share/mkcert/rootCA.pem",
+    os.path.expanduser("~/.local/share/mkcert/rootCA.pem"),
+):
+    if _ssl_cert and os.path.isfile(_ssl_cert):
+        os.environ.setdefault("SSL_CERT_FILE", _ssl_cert)
+        break
+
 _sandbox_cache: Dict[str, Any] = {}
 _session_locks: Dict[str, threading.Lock] = {}
 _cache_guard = threading.Lock()
@@ -99,18 +109,37 @@ def _connect_sandbox(sandbox_id: str):
     return Sandbox.connect(sandbox_id=sandbox_id, timeout=SANDBOX_TIMEOUT)
 
 
+def _verify_envd(sandbox) -> bool:
+    try:
+        return bool(sandbox.is_running())
+    except Exception:
+        logger.warning("envd health check failed", exc_info=True)
+        return False
+
+
 def ensure_sandbox(session_id: str):
     """确保 session 已绑定可用沙箱；不存在则 create，存在则 connect。"""
     lock = _lock_for(session_id)
     with lock:
         cached = _sandbox_cache.get(session_id)
         if cached is not None:
+            if not _verify_envd(cached):
+                logger.warning(
+                    "cached sandbox envd unreachable: session_id=%s",
+                    session_id,
+                )
             return cached
 
         meta = _load_meta(session_id)
         if meta:
             try:
                 sb = _connect_sandbox(meta["sandbox_id"])
+                if not _verify_envd(sb):
+                    logger.warning(
+                        "connected sandbox envd unreachable: session_id=%s sandbox_id=%s",
+                        session_id,
+                        meta.get("sandbox_id"),
+                    )
                 _sandbox_cache[session_id] = sb
                 return sb
             except Exception:
@@ -122,6 +151,11 @@ def ensure_sandbox(session_id: str):
                 )
 
         sb = _create_sandbox()
+        if not _verify_envd(sb):
+            logger.warning(
+                "sandbox created but envd unreachable (CubeProxy may be down): session_id=%s",
+                session_id,
+            )
         _sandbox_cache[session_id] = sb
         _save_meta(session_id, sb.sandbox_id, SANDBOX_WORKDIR)
         logger.info(

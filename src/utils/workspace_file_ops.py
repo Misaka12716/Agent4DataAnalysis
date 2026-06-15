@@ -3,9 +3,12 @@
 # 启用 Cube Sandbox 时，读写优先走沙箱 API，并同步本地镜像供 Reader 使用。
 
 from typing import Optional, List
+import logging
 import os
 from sandbox.config import is_sandbox_enabled
 from utils.workspace_manager import to_absolute_path, resolve_workspace_root, is_safe_relative_path
+
+logger = logging.getLogger(__name__)
 
 
 def _sync_mirror(session_id: str) -> None:
@@ -151,9 +154,18 @@ def write_bytes_file(session_id: str, relative_path: str, data: bytes) -> bool:
             if write_bytes(session_id, relative_path, data):
                 _sync_mirror(session_id)
                 return True
-            return False
-        except Exception:
-            return False
+            logger.warning(
+                "sandbox write failed for session=%s path=%s; falling back to local mirror",
+                session_id,
+                relative_path,
+            )
+        except Exception as exc:
+            logger.warning(
+                "sandbox write raised for session=%s path=%s: %s; falling back to local mirror",
+                session_id,
+                relative_path,
+                exc,
+            )
 
     root = resolve_workspace_root(session_id)
     if not root:
