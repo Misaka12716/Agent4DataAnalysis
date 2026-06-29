@@ -78,7 +78,12 @@ def write_bytes(session_id: str, relative_path: str, data: bytes) -> bool:
     if not is_safe_relative_path(relative_path):
         return False
     try:
-        sandbox = ensure_sandbox(session_id)
+        from sandbox.session_manager import ensure_sandbox, is_envd_reachable
+
+        ensure_sandbox(session_id)
+        if not is_envd_reachable(session_id):
+            return False
+        sandbox = get_sandbox(session_id)
         sandbox.files.write(remote_path(relative_path), data)
         return True
     except Exception:
@@ -119,6 +124,14 @@ def sync_to_local(session_id: str) -> Optional[str]:
     if not root:
         return None
     os.makedirs(root, exist_ok=True)
+
+    try:
+        from sandbox.session_manager import is_envd_reachable
+
+        if not is_envd_reachable(session_id):
+            return os.path.abspath(root)
+    except Exception:
+        return os.path.abspath(root)
 
     try:
         sandbox = get_sandbox(session_id)

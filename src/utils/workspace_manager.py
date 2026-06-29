@@ -20,29 +20,53 @@ def _ensure_workspaces_root() -> str:
     return WORKSPACES_ROOT
 
 
+def workspace_path_for(user_id: int, session_id: str) -> str:
+    """计算用户级隔离下的会话工作区绝对路径（不创建目录）。"""
+    return os.path.abspath(
+        os.path.join(WORKSPACES_ROOT, str(int(user_id)), (session_id or "").strip())
+    )
+
+
 def resolve_workspace_root(session_id: str) -> Optional[str]:
     """
     根据 session_id 得到该会话工作区的绝对路径（不创建目录）。
+    解析顺序：DB workspace_abs_path → user_id/session_id 布局。
     若未初始化过则返回 None。
     """
-    root = _ensure_workspaces_root()
-    path = os.path.join(root, session_id)
-    return path if os.path.isdir(path) else None
+    sid = (session_id or "").strip()
+    if not sid:
+        return None
+
+    from db.session_store import SessionStore
+
+    db_path = SessionStore.get_workspace_path(sid)
+    if db_path:
+        abs_db = os.path.abspath(str(db_path).strip())
+        if os.path.isdir(abs_db):
+            return abs_db
+
+    row, err = SessionStore.get_session_user(sid)
+    if not err and row and row.get("user_id"):
+        path = workspace_path_for(int(row["user_id"]), sid)
+        if os.path.isdir(path):
+            return path
+
+    return None
 
 
-def init_workspace(session_id: Optional[str] = None) -> str:
+def init_workspace(user_id: int, session_id: Optional[str] = None) -> str:
     """
     为会话创建唯一工作区目录（仅根目录，不创建 input/output/code 子目录）。
-    - 若传入 session_id 则使用该 ID 作为目录名（用于已有会话绑定）；
-    - 否则生成新的 UUID 作为 session_id 并创建目录。
+    路径布局：workspaces/<user_id>/<session_id>/。
     返回: 工作区绝对路径
     """
+    if user_id <= 0:
+        raise ValueError("user_id 必须为正整数")
     _ensure_workspaces_root()
-    if not session_id:
-        session_id = str(uuid.uuid4())
-    abs_path = os.path.join(WORKSPACES_ROOT, session_id)
+    sid = (session_id or "").strip() or str(uuid.uuid4())
+    abs_path = workspace_path_for(user_id, sid)
     os.makedirs(abs_path, exist_ok=True)
-    return os.path.abspath(abs_path)
+    return abs_path
 
 
 def generate_data_filename(workspace_abs: str, original_filename: str) -> str:
@@ -131,15 +155,17 @@ def to_absolute_path(session_id: str, relative_path: str) -> Optional[str]:
 def get_workspace_session_id_from_abs_path(absolute_path: str) -> Optional[str]:
     """
     从绝对路径反推 session_id（若路径在 WORKSPACES_ROOT 下）。
-    用于日志或校验，非必须。
+    布局 workspaces/<user_id>/<session_id>/...
     """
     root = os.path.abspath(WORKSPACES_ROOT)
     path = os.path.abspath(absolute_path)
-    if not path.startswith(root):
+    if not path.startswith(root + os.sep) and path != root:
         return None
     rel = os.path.relpath(path, root)
     parts = rel.split(os.sep)
-    return parts[0] if parts else None
+    if len(parts) >= 2:
+        return parts[1]
+    return None
 
 
 def build_workspace_tree(workspace_abs: str) -> Dict[str, object]:

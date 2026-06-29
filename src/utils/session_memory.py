@@ -16,7 +16,6 @@ from configs.config import (
     SESSION_MEMORY_ENABLED,
     SESSION_MEMORY_PROMPT_MAX_CHARS,
 )
-from sandbox.config import is_sandbox_enabled
 from db.session_store import SessionStore
 from reader.agent import run_workspace_reader_with_markdown_sync
 from reader.file_types import IMAGE_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS
@@ -29,18 +28,9 @@ SESSION_MEMORY_FILENAME = "SESSION_MEMORY.md"
 
 _MAX_DIGEST_CHARS = 12000
 _MAX_WORKER_SECTION = 10000
-
-
-def _sync_sandbox_mirror(session_id: str) -> None:
-    if not is_sandbox_enabled() or not session_id:
-        return
-    try:
-        from sandbox.files import sync_to_local
-
-        sync_to_local(session_id)
-    except Exception:
-        logger.exception("sync sandbox mirror failed: session_id=%s", session_id)
 _MAX_PLAN_SECTION = 8000
+
+
 def session_memory_enabled() -> bool:
     return bool(SESSION_MEMORY_ENABLED)
 
@@ -392,7 +382,6 @@ def persist_from_pipeline_state(
     if not session_id:
         return
     try:
-        _sync_sandbox_mirror(session_id)
         ws_abs = _workspace_abs(session_id)
         lang = (state.get("lang") or "zh").strip() or "zh"
         md = build_session_memory_markdown(
@@ -435,7 +424,6 @@ def persist_workspace_snapshot(
     if not session_memory_enabled() or not session_id:
         return
     try:
-        _sync_sandbox_mirror(session_id)
         ws_abs = _workspace_abs(session_id)
         wc: Dict[str, Any] = {}
         root = resolve_workspace_root(session_id)

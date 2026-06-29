@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+import time
 from typing import Any, Dict, Optional
 
 from sandbox.config import (
@@ -45,6 +46,11 @@ for _ssl_cert in (
         break
 
 _sandbox_cache: Dict[str, Any] = {}
+_envd_reachable: Dict[str, bool] = {}
+_envd_warned: set[str] = set()
+_sandbox_unavailable_warned: bool = False
+_create_cooldown_until: float = 0.0
+_CREATE_COOLDOWN_SEC = 60.0
 _session_locks: Dict[str, threading.Lock] = {}
 _cache_guard = threading.Lock()
 
@@ -109,12 +115,61 @@ def _connect_sandbox(sandbox_id: str):
     return Sandbox.connect(sandbox_id=sandbox_id, timeout=SANDBOX_TIMEOUT)
 
 
-def _verify_envd(sandbox) -> bool:
+def _verify_envd_once(sandbox, session_id: str) -> bool:
+    """探测 envd 是否可达；结果按 session 缓存，避免每次操作重复 HTTP 探测。"""
+    if session_id in _envd_reachable:
+        return _envd_reachable[session_id]
     try:
-        return bool(sandbox.is_running())
-    except Exception:
-        logger.warning("envd health check failed", exc_info=True)
+        ok = bool(sandbox.is_running())
+    except Exception as exc:
+        logger.debug("envd unreachable session=%s: %s", session_id, exc)
+        ok = False
+    _envd_reachable[session_id] = ok
+    if not ok and session_id not in _envd_warned:
+        _envd_warned.add(session_id)
+        logger.warning(
+            "CubeProxy/envd unreachable for session=%s; using local workspace mirror. "
+            "To restore sandbox execution: sudo systemctl restart cube-sandbox-cube-proxy.service",
+            session_id,
+        )
+    return ok
+
+
+def is_envd_reachable(session_id: str) -> bool:
+    """envd 是否可用；未知时先 ensure_sandbox 再返回缓存结果。"""
+    if session_id in _envd_reachable:
+        return _envd_reachable[session_id]
+    ensure_sandbox(session_id)
+    return _envd_reachable.get(session_id, False)
+
+
+def _warn_sandbox_unavailable(exc: Exception) -> None:
+    global _sandbox_unavailable_warned
+    if _sandbox_unavailable_warned:
+        return
+    _sandbox_unavailable_warned = True
+    logger.warning(
+        "Cube Sandbox control plane unavailable (%s); using local workspace mirror. "
+        "Run: bash scripts/diagnose-cube-sandbox.sh",
+        exc,
+    )
+
+
+def try_ensure_sandbox(session_id: str) -> bool:
+    """
+    尽力绑定沙箱；控制面创建失败时返回 False（不抛异常），调用方应使用本地工作区。
+    """
+    try:
+        ensure_sandbox(session_id)
+        return True
+    except Exception as exc:
+        _warn_sandbox_unavailable(exc)
         return False
+
+
+def is_sandbox_bound(session_id: str) -> bool:
+    """当前 session 是否已成功绑定沙箱实例。"""
+    return session_id in _sandbox_cache
 
 
 def ensure_sandbox(session_id: str):
@@ -123,23 +178,13 @@ def ensure_sandbox(session_id: str):
     with lock:
         cached = _sandbox_cache.get(session_id)
         if cached is not None:
-            if not _verify_envd(cached):
-                logger.warning(
-                    "cached sandbox envd unreachable: session_id=%s",
-                    session_id,
-                )
             return cached
 
         meta = _load_meta(session_id)
         if meta:
             try:
                 sb = _connect_sandbox(meta["sandbox_id"])
-                if not _verify_envd(sb):
-                    logger.warning(
-                        "connected sandbox envd unreachable: session_id=%s sandbox_id=%s",
-                        session_id,
-                        meta.get("sandbox_id"),
-                    )
+                _verify_envd_once(sb, session_id)
                 _sandbox_cache[session_id] = sb
                 return sb
             except Exception:
@@ -150,12 +195,20 @@ def ensure_sandbox(session_id: str):
                     exc_info=True,
                 )
 
-        sb = _create_sandbox()
-        if not _verify_envd(sb):
-            logger.warning(
-                "sandbox created but envd unreachable (CubeProxy may be down): session_id=%s",
-                session_id,
+        _envd_reachable.pop(session_id, None)
+        _envd_warned.discard(session_id)
+        global _create_cooldown_until
+        if time.monotonic() < _create_cooldown_until:
+            raise RuntimeError(
+                "sandbox create skipped (recent control-plane failure; "
+                f"retry after {_CREATE_COOLDOWN_SEC}s)"
             )
+        try:
+            sb = _create_sandbox()
+        except Exception as exc:
+            _create_cooldown_until = time.monotonic() + _CREATE_COOLDOWN_SEC
+            raise exc
+        _verify_envd_once(sb, session_id)
         _sandbox_cache[session_id] = sb
         _save_meta(session_id, sb.sandbox_id, SANDBOX_WORKDIR)
         logger.info(
@@ -196,3 +249,5 @@ def clear_sandbox_cache(session_id: str) -> None:
     """测试辅助：清除内存缓存。"""
     with _lock_for(session_id):
         _sandbox_cache.pop(session_id, None)
+        _envd_reachable.pop(session_id, None)
+        _envd_warned.discard(session_id)

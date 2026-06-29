@@ -46,7 +46,7 @@ data: <json-string>
 
 `/run-analysis` -> `streaming_task_generator` -> `run_orchestrated_analysis_stream` -> LangGraph 各节点产出事件 -> 队列转发 -> SSE 输出。
 
-流水线开始前，`_build_workspace_context` 会 `sync_to_local` 将沙箱内容同步到本地镜像（供 Reader 等读取）；流水线结束后调用 `pause_sandbox` 暂停沙箱。
+流水线通过 `ensure_runtime(session_id)` 绑定执行层；Reader 直接读取 `workspaces/<user_id>/<session_id>/` 下的文件。流水线结束后调用 `release_runtime(session_id)`（沙箱模式下内部 pause VM）。
 
 ### 3.2 编排层事件来源
 
@@ -134,7 +134,7 @@ data: <json-string>
 }
 ```
 
-用途：返回**沙箱内** Python 执行结果（`sandbox.commands.run`）；`CUBE_SANDBOX_ENABLED=0` 时回退宿主机 subprocess。供前端展示和后续编排判断。
+用途：返回 Python 执行结果（经 `runtime.commands.run`）。默认本地 Runtime 下由 **`RUNNER_PYTHON`**（如 `agentPlatform-runner`）执行，与 FastAPI 主环境隔离；`CUBE_SANDBOX_ENABLED=1` 时走 Cube 沙箱内 Python。供前端展示和后续编排判断。
 
 ### 4.5 report_chunk
 
@@ -233,7 +233,7 @@ data: <json-string>
 - 建议保留原始事件列表，便于排查 Supervisor 路由和失败回溯
 - 若部署在反向代理后，确保禁用响应缓冲（当前已设置 `X-Accel-Buffering: no`，代理侧也需对应配置）
 - 长链接场景下可配合 `/session/snapshot` 做断线重连恢复
-- Cube Sandbox 与 `sync_to_local` / `pause_sandbox` 语义见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md)
+- 执行 Runtime 与可选 Cube Sandbox 见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md)
 
 ## 9. 一次完整流的典型事件顺序（示例）
 

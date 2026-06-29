@@ -14,9 +14,9 @@
 
 ## 功能概览
 
-- 会话级工作区：每个 `session_id` 对应独立 **Cube Sandbox MicroVM**；真实文件存储在沙箱内，本地 `TEMP_FOLDER/workspaces/<session_id>` 为**镜像目录**（供 Reader / workspace-tree 等读取）。
-- 代码执行：Worker 在沙箱内通过 `commands.run` 执行 Python；`CUBE_SANDBOX_ENABLED=0` 时可回退宿主机 subprocess。
-- 文件上传：支持将 `xlsx/xls/csv` 等写入沙箱工作区根目录，并按 `data.xxx`、`data_1.xxx` 规则命名，再同步到本地镜像。
+- 会话级工作区：每个用户在 `TEMP_FOLDER/workspaces/<user_id>/<session_id>/` 拥有独立目录；默认经 **本地 Runtime**（[`src/runtime/`](src/runtime/)）读写与执行 Python。
+- 代码执行：Worker 通过 **独立 Runner 环境**（`RUNNER_PYTHON` / `agentPlatform-runner`）运行 `python3 <相对路径>`，与 FastAPI 主环境隔离。
+- 文件上传：支持将 `xlsx/xls/csv` 等写入工作区根目录，并按 `data.xxx`、`data_1.xxx` 规则命名。
 - 任务流式分析：后端通过 SSE 持续推送编排决策、各阶段事件与报告片段；每条有效负载会先写入 MySQL 会话内容（累计全文 + 版本号），再推送给客户端。
 - 断线重连：可通过快照接口拉取当前累计内容与版本号。
 - 最简测试前端：内置 Streamlit 页面用于联调上传/快照/流式分析接口。
@@ -37,13 +37,15 @@ AgentPlatform/
 │   ├── orchestrator/           # LangGraph 顶层编排（Supervisor + 子图节点）
 │   ├── planner/                # 规划器（含工作区上下文）
 │   ├── coder/                  # 代码生成与失败修正写入
-│   ├── worker/                 # 沙箱内代码执行（可回退 subprocess）
-│   ├── sandbox/                # Cube Sandbox 会话、文件、Worker 封装
+│   ├── worker/                 # 工作区代码执行（经 runtime）
+│   ├── runtime/                # 统一执行层（本地默认；可选沙箱适配）
+│   ├── sandbox/                # Cube Sandbox 可选后端（供 runtime 适配器）
 │   ├── reporter/               # 报告生成（流式 chunk）
 │   ├── db/                     # 会话与数据库模型
-│   ├── utils/                  # MySQL、工作区镜像与文件操作等工具
+│   ├── utils/                  # MySQL、工作区管理与文件操作等工具
 │   └── configs/                # 提示词等配置
 ├── requirements.txt
+├── requirements-runner.txt       # Runner 执行环境依赖（数据分析包）
 └── README.md
 ```
 
@@ -51,8 +53,8 @@ AgentPlatform/
 
 ## 运行环境
 
-- Python: `3.13.x`（项目文档示例为 `3.13.7`）
-- 依赖栈含 **LangChain / LangGraph**（见 [`requirements.txt`](requirements.txt)）
+- **主服务 Python**：`3.13.x`（conda 环境 `agentPlatform`，含 LangChain / LangGraph，见 [`requirements.txt`](requirements.txt)）
+- **Runner Python**：独立 conda 环境 `agentPlatform-runner`（Worker 执行 Agent 代码，见 [`requirements-runner.txt`](requirements-runner.txt)）
 - 数据库: MySQL（用于会话内容和工作区路径持久化）
 - 推荐 OS: Linux
 
@@ -66,6 +68,10 @@ AgentPlatform/
 conda create -n agentPlatform python=3.13.7
 conda activate agentPlatform
 pip install -r requirements.txt
+
+# Runner 执行环境（Worker 代码运行，与主服务隔离）
+bash scripts/setup-runner-env.sh
+export RUNNER_PYTHON="$(conda run -n agentPlatform-runner which python)"
 ```
 
 可选：注册 Jupyter 内核
@@ -97,19 +103,26 @@ python -m ipykernel install --user --name agentPlatform --display-name "Python (
   - `MYSQL_PORT`（支持环境变量）
   - `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DB`
 - 工作区与临时路径：
-  - `TEMP_FOLDER`：本地镜像位于 `TEMP_FOLDER/workspaces/<session_id>`（内容与沙箱一致）
+  - `TEMP_FOLDER`：会话工作区位于 `TEMP_FOLDER/workspaces/<user_id>/<session_id>`
   - 仓库内 `PATH` 等路径为开发机示例，部署到新环境时请改为本机实际路径
-- Cube Sandbox（默认启用，见 [`.env.example`](.env.example)）：
+- **执行 Runtime**（默认本地，见 [`src/runtime/config.py`](src/runtime/config.py)）：
+
+| 环境变量 | 说明 | 默认 |
+|----------|------|------|
+| `RUNNER_PYTHON` | Worker 代码执行的 Python 解释器路径 | `python3`（建议设为 agentPlatform-runner） |
+| `CUBE_SANDBOX_ENABLED` | `1` 启用 Cube Sandbox 后端；`0` 本地 Runtime | `0` |
+| `RUNTIME_COMMAND_TIMEOUT` | 单次命令超时（秒） | `300` |
+| `RUNTIME_MAX_OUTPUT_CHARS` | stdout/stderr 截断上限 | `524288` |
+
+- **Cube Sandbox（可选）**：`CUBE_SANDBOX_ENABLED=1` 时需配置 Cube API 与模板（见 [`.env.example`](.env.example)）：
 
 | 环境变量 | 说明 | 示例 |
 |----------|------|------|
-| `CUBE_SANDBOX_ENABLED` | `1` 启用沙箱；`0` 回退本地 subprocess | `1` |
 | `E2B_API_URL` | Cube API 地址 | `http://127.0.0.1:3000` |
 | `E2B_API_KEY` | API Key | `e2b_000000` |
 | `CUBE_TEMPLATE_ID` | 沙箱模板 ID | `tpl-78c1861fc2b54381947d33e2` |
 | `SANDBOX_WORKDIR` | 沙箱内工作目录 | `/home/user` |
 | `SANDBOX_TIMEOUT` | 沙箱命令超时（秒） | `600` |
-| `SSL_CERT_FILE` | 可选，HTTPS 自签证书 | — |
 
 > 注意：当前仓库中的默认数据库账号密码仅适用于本地开发示例，生产环境请务必改为安全配置。
 
@@ -156,16 +169,18 @@ CREATE TABLE IF NOT EXISTS session_content (
 
 ### 1) 启动后端（FastAPI）
 
-**前置**：Cube Sandbox 已部署（见 [`docs/Cubesandbox-deploy.md`](docs/Cubesandbox-deploy.md)），并配置 [`.env.example`](.env.example) 中的 E2B 相关变量。完整步骤见 [`docs/StartInstruction.md`](docs/StartInstruction.md)。
+**前置**：MySQL 已就绪；默认本地 Runtime 无需 Cube。完整步骤见 [`docs/StartInstruction.md`](docs/StartInstruction.md)。启用 Cube Sandbox 时见 [`docs/Cubesandbox-deploy.md`](docs/Cubesandbox-deploy.md)。
 
 在项目根目录执行：
 
 ```bash
 cd src
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+# Runner 执行环境（Worker 代码，与主服务隔离）
+export RUNNER_PYTHON="$(conda run -n agentPlatform-runner which python)"
 # 生产环境务必设置 JWT 签名密钥
 export JWT_SECRET_KEY="your-production-secret"
-# 若未使用 .env，在此 export CUBE_SANDBOX_ENABLED、E2B_API_URL 等
+# 可选：CUBE_SANDBOX_ENABLED=1、E2B_API_URL 等
 uvicorn backend.server:app --host 0.0.0.0 --port 52716
 ```
 
@@ -230,15 +245,15 @@ streamlit run frontend/frontend.py
 
 ## 工作机制（与代码一致）
 
-1. **创建会话**：`POST /session/create` 初始化本地镜像目录，并调用 `ensure_sandbox(session_id)` 创建/绑定 Cube Sandbox；`sandbox_id` 写入镜像目录下的 `.cube_sandbox_meta.json`（不入库）。
-2. **上传**：文件经 `files.write` 写入沙箱，再 `sync_to_local` 更新镜像；Reader 按类型生成 digest（图片可走 Vision 多模态），Planner 侧列举工作区文件并读取结构样例。
+1. **创建会话**：`POST /session/create` 初始化工作区目录 `tmp/workspaces/<user_id>/<session_id>/`，并绑定本地 Runtime（`ensure_runtime`）。
+2. **上传**：文件经 `runtime.files.write` 写入工作区；Reader 按类型生成 digest（图片可走 Vision 多模态），Planner 侧列举工作区文件并读取结构样例。
 3. **Supervisor**：每次子阶段结束后回到 Supervisor，由结构化 LLM 决策下一步（`planner` / `coder` / `worker` / `reporter` / `finish`）；非法跳步会被代码侧「钳制」为合法路由。
 4. **Planner**：产出包含「需求解析」「步骤分解」等字段的规划；无效规划会触发重试直至上限。
-5. **Coder**：首次生成并写入沙箱代码（默认 `main.py`）；Worker 失败且未超修正次数时走「修正写入」路径，并附带 stderr 等错误摘要。
-6. **Worker**：在沙箱内通过 `commands.run` 执行 Python（`CUBE_SANDBOX_ENABLED=0` 时回退宿主机 subprocess），汇总 `stdout/stderr` 与成功标志。
-7. **Reader / workspace-tree**：读取镜像前会先 `sync_to_local`，保证与沙箱内容一致。
+5. **Coder**：首次生成并写入工作区代码（默认 `main.py`）；Worker 失败且未超修正次数时走「修正写入」路径，并附带 stderr 等错误摘要。
+6. **Worker**：经 `RUNNER_PYTHON` 指定的独立环境执行 `runtime.commands.run("python3 <相对路径>")`，汇总 `stdout/stderr` 与成功标志。
+7. **Reader / workspace-tree**：直接读取工作区目录。
 8. **Reporter**：根据规划摘要与 Worker 结果流式输出报告片段。
-9. **流水线结束**：调用 `pause_sandbox` 暂停沙箱；SSE 持久化逻辑不变——每个 JSON 片段先写入 MySQL，再推送客户端。
+9. **流水线结束**：调用 `release_runtime(session_id)`（沙箱模式下 pause VM）；SSE 持久化逻辑不变——每个 JSON 片段先写入 MySQL，再推送客户端。
 
 ### SSE 中常见的 `type` 字段（便于联调）
 
@@ -270,24 +285,25 @@ streamlit run frontend/frontend.py
 
 ### 3) 上传后找不到文件
 
-系统会将文件重命名为 `data.xxx`、`data_1.xxx` 等统一命名，请在返回值中的 `relative_path` 查看实际文件名。
+系统会将文件重命名为 `data.xxx`、`data_1.xxx` 等统一命名，请在返回值中的 `relative_path` 查看实际文件名。工作区位于 `tmp/workspaces/<user_id>/<session_id>/`。
 
-### 4) 流水线未走到报告或频繁回溯
+### 4) Worker 报错或缺少 pandas 等包
+
+- 运行 `bash scripts/diagnose-runner-env.sh` 检查 `RUNNER_PYTHON`。
+- 未设置时 Worker 回退系统 `python3`，可能与主环境混用或缺少数据分析包。
+- Runner 依赖见 [`requirements-runner.txt`](requirements-runner.txt)；启用 Cube Sandbox 时另需检查模板内 Python 与依赖。
+
+### 5) 流水线未走到报告或频繁回溯
 
 - 查看 SSE 中 `type=orchestrator` 的路由与 `reason`，确认是规划无效、代码未写入还是 Worker 报错。
 - 适当调大或检查环境变量中的 `MAX_*` 上限；仍失败时请结合 Worker 的 stderr 与模型能力排查。
 
-### 5) Cube API 不可达或创建沙箱失败
+### 6) Cube API 不可达或沙箱/template 配置错误（仅 CUBE_SANDBOX_ENABLED=1）
 
 - 确认 Cube Sandbox 控制面已启动：`curl --noproxy '*' http://127.0.0.1:3000/health`。
-- 检查 `E2B_API_URL`、`E2B_API_KEY` 是否与部署一致。
+- 检查 `E2B_API_URL`、`E2B_API_KEY`、`CUBE_TEMPLATE_ID` 是否与部署一致。
 - 启动后端前 `unset http_proxy https_proxy`，避免 SDK 经代理返回 502。
-
-### 6) 模板 ID 错误或 Worker 沙箱执行失败
-
-- 确认 `CUBE_TEMPLATE_ID` 与 `cubemastercli tpl watch` 输出的 READY 模板一致。
-- 模板内需包含 Python 3 及分析所需依赖；Worker stderr 会经 SSE 返回。
-- 本地联调可设 `CUBE_SANDBOX_ENABLED=0` 验证非沙箱路径是否正常。
+- 本地联调默认 `CUBE_SANDBOX_ENABLED=0`；Cube 不可用时 Runtime 工厂会自动降级本地。
 
 ---
 

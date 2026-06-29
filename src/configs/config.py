@@ -42,17 +42,20 @@ SESSION_MEMORY_ENABLED = os.getenv("SESSION_MEMORY_ENABLED", "1") == "1"
 SESSION_MEMORY_PROMPT_MAX_CHARS = int(os.getenv("SESSION_MEMORY_PROMPT_MAX_CHARS", "6000"))
 
 # --------------------------
-# Cube Sandbox（E2B SDK）
+# 执行 Runtime（默认本地；可选 Cube Sandbox 后端）
 # --------------------------
-from sandbox.config import (  # noqa: E402
-    CUBE_SANDBOX_ENABLED,
-    CUBE_TEMPLATE_ID,
-    E2B_API_KEY,
-    E2B_API_URL,
-    SANDBOX_TIMEOUT,
-    SANDBOX_WORKDIR,
-    is_sandbox_enabled,
+from runtime.config import (  # noqa: E402
+    DEFAULT_COMMAND_TIMEOUT,
+    MAX_OUTPUT_CHARS,
+    RUNNER_PYTHON,
+    get_runner_python,
+    is_sandbox_backend_enabled,
 )
+
+# 兼容旧引用
+is_sandbox_enabled = is_sandbox_backend_enabled
+CUBE_SANDBOX_ENABLED = is_sandbox_backend_enabled()
+WORKSPACE_ROOT = "."
 
 
 # 是否开启大模型全流程日志记录

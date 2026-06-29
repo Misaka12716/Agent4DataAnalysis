@@ -51,7 +51,10 @@ def build_send_sms_code_response(phone: str) -> JSONResponse:
     }
 
     try:
-        response = requests.post(_SMS_URL, data=params, timeout=8)
+        # 国内短信网关直连；忽略 shell 里的 HTTP/SOCKS 代理（避免 7890 / Missing SOCKS support）
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.post(_SMS_URL, data=params, timeout=8)
         response.raise_for_status()
         response_json = response.json()
     except requests.RequestException as exc:

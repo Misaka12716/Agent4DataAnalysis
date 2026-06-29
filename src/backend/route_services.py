@@ -23,7 +23,7 @@ from utils.workspace_manager import (
 )
 from utils.workspace_file_ops import write_bytes_file
 from utils.session_memory import persist_workspace_snapshot
-from sandbox.config import is_sandbox_enabled
+from runtime.factory import ensure_runtime
 from configs.config import LANGUAGE
 
 MAX_FILE_SIZE = 2048 * 1024 * 1024  # 最大文件大小（2048M，与Nginx配置一致）
@@ -72,15 +72,11 @@ async def handle_session_upload_excel(
             )
     await file.seek(0)
 
-    if is_sandbox_enabled():
-        try:
-            from sandbox.session_manager import ensure_sandbox
+    ensure_runtime(session_id)
 
-            ensure_sandbox(session_id)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"沙箱不可用: {e}")
-
-    workspace_abs = str(session_user.get("workspace_abs_path") or "").strip() or init_workspace(session_id)
+    workspace_abs = str(session_user.get("workspace_abs_path") or "").strip()
+    if not workspace_abs:
+        workspace_abs = init_workspace(int(session_user.get("user_id") or current_user_id), session_id)
     os.makedirs(workspace_abs, exist_ok=True)
     # 统一数据文件命名：data.xxx / data_1.xxx / data_2.xxx ...
     safe_name = generate_data_filename(workspace_abs, file.filename or "")
@@ -89,19 +85,8 @@ async def handle_session_upload_excel(
         while chunk := await file.read(1024 * 1024):
             chunks.append(chunk)
         file_data = b"".join(chunks)
-        if is_sandbox_enabled():
-            if not write_bytes_file(session_id, safe_name, file_data):
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        "保存文件失败：沙箱数据面不可用且本地镜像写入也失败。"
-                        "请检查 cube-sandbox-cube-proxy.service 或设置 CUBE_SANDBOX_ENABLED=0。"
-                    ),
-                )
-        else:
-            save_path = os.path.join(workspace_abs, safe_name)
-            with open(save_path, "wb") as f:
-                f.write(file_data)
+        if not write_bytes_file(session_id, safe_name, file_data):
+            raise HTTPException(status_code=500, detail="保存文件到工作区失败")
     except HTTPException:
         raise
     except Exception as e:
@@ -213,18 +198,12 @@ def build_create_session_response(user_id: int) -> JSONResponse:
         raise HTTPException(status_code=404, detail="user_id 不存在，请先登录或注册")
 
     session_id = str(uuid.uuid4())
-    workspace_abs = init_workspace(session_id)
+    workspace_abs = init_workspace(user_id, session_id)
     ok, err = SessionStore.create_session(session_id, user_id, workspace_abs)
     if not ok:
         raise HTTPException(status_code=500, detail=f"创建会话失败: {err or 'unknown error'}")
 
-    if is_sandbox_enabled():
-        try:
-            from sandbox.session_manager import ensure_sandbox
-
-            ensure_sandbox(session_id)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"创建沙箱失败: {e}")
+    ensure_runtime(session_id)
 
     try:
         persist_workspace_snapshot(
@@ -357,14 +336,6 @@ def build_session_workspace_tree_response(session_id: str, current_user_id: int)
             },
             status_code=200,
         )
-
-    if is_sandbox_enabled():
-        try:
-            from sandbox.files import sync_to_local
-
-            sync_to_local(sid)
-        except Exception:
-            pass
 
     try:
         tree = build_workspace_tree(workspace_abs)

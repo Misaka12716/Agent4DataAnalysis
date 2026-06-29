@@ -1,7 +1,7 @@
 import os
 
 def is_sandbox_enabled() -> bool:
-    return os.getenv("CUBE_SANDBOX_ENABLED", "1") == "1"
+    return os.getenv("CUBE_SANDBOX_ENABLED", "0") == "1"
 
 CUBE_SANDBOX_ENABLED = is_sandbox_enabled()
 E2B_API_URL = os.getenv("E2B_API_URL", "http://127.0.0.1:3000")

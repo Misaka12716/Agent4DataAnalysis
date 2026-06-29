@@ -6,17 +6,12 @@
 from string import Formatter
 from typing import Any, Optional
 
-try:
-    from configs.config import SANDBOX_WORKDIR
-except Exception:
-    SANDBOX_WORKDIR = "/home/user"
-
 _WORKSPACE_PATH_NOTE_ZH = (
-    f"你正在 Cube Sandbox 隔离环境中操作（工作目录 `{SANDBOX_WORKDIR}`），"
+    "你正在会话工作区中操作（工作目录为工作区根目录 `.`），"
     "所有文件路径请使用相对路径（不要使用绝对路径或 ../ 等逃逸路径）。"
 )
 _WORKSPACE_PATH_NOTE_EN = (
-    f"You are operating in an isolated Cube Sandbox (working directory `{SANDBOX_WORKDIR}`); "
+    "You are operating in the session workspace (working directory is the workspace root `.`); "
     "use relative paths for all file paths (no absolute paths or path traversal like ../)."
 )
 

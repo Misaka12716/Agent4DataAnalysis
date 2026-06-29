@@ -1,13 +1,10 @@
 # worker/workspace_worker.py
 # 在工作区内调度并执行代码：根据 Planner 的模式（单文件/多文件）执行，cwd 设为工作区根目录。
-# 启用 Cube Sandbox 时在隔离 MicroVM 内执行。
 
-import os
-import subprocess
 from typing import List, Dict, Any
 
-from sandbox.config import is_sandbox_enabled
-from utils.workspace_manager import resolve_workspace_root, to_absolute_path
+from runtime.factory import ensure_runtime
+from runtime.validation import build_python_command, is_safe_relative_path
 
 
 def run_python_in_workspace(
@@ -19,69 +16,25 @@ def run_python_in_workspace(
     在工作区根目录下执行单个 Python 文件。
     :return: { "relative_path", "stdout", "stderr", "returncode", "success" }
     """
-    if is_sandbox_enabled():
-        try:
-            from sandbox.worker import run_python_in_sandbox
+    if not is_safe_relative_path(relative_path):
+        return {
+            "relative_path": relative_path,
+            "stdout": "",
+            "stderr": f"路径不安全: {relative_path}",
+            "returncode": -1,
+            "success": False,
+        }
 
-            return run_python_in_sandbox(session_id, relative_path, timeout=timeout)
-        except Exception as e:
-            return {
-                "relative_path": relative_path,
-                "stdout": "",
-                "stderr": str(e),
-                "returncode": -1,
-                "success": False,
-            }
-
-    root = resolve_workspace_root(session_id)
-    if not root:
-        return {
-            "relative_path": relative_path,
-            "stdout": "",
-            "stderr": "工作区不存在",
-            "returncode": -1,
-            "success": False,
-        }
-    abs_path = to_absolute_path(session_id, relative_path)
-    if not abs_path or not os.path.isfile(abs_path):
-        return {
-            "relative_path": relative_path,
-            "stdout": "",
-            "stderr": f"文件不存在或路径不安全: {relative_path}",
-            "returncode": -1,
-            "success": False,
-        }
-    try:
-        result = subprocess.run(
-            [os.environ.get("PYTHON", "python3"), abs_path],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        return {
-            "relative_path": relative_path,
-            "stdout": result.stdout or "",
-            "stderr": result.stderr or "",
-            "returncode": result.returncode,
-            "success": result.returncode == 0,
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "relative_path": relative_path,
-            "stdout": "",
-            "stderr": "执行超时",
-            "returncode": -1,
-            "success": False,
-        }
-    except Exception as e:
-        return {
-            "relative_path": relative_path,
-            "stdout": "",
-            "stderr": str(e),
-            "returncode": -1,
-            "success": False,
-        }
+    rt = ensure_runtime(session_id)
+    cmd = build_python_command(relative_path)
+    result = rt.commands.run(cmd, cwd=rt.workdir, timeout=float(timeout))
+    return {
+        "relative_path": relative_path,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "returncode": result.exit_code,
+        "success": result.success,
+    }
 
 
 def run_workspace_tasks(
@@ -98,18 +51,7 @@ def run_workspace_tasks(
     :param timeout_per_file: 每个文件执行超时（秒）
     :return: { "success", "results": [ run_python_in_workspace 的返回值, ... ], "logs", "error_messages" }
     """
-    if is_sandbox_enabled():
-        try:
-            from sandbox.session_manager import ensure_sandbox
-
-            ensure_sandbox(session_id)
-        except Exception as e:
-            return {
-                "success": False,
-                "results": [],
-                "logs": "",
-                "error_messages": [str(e)],
-            }
+    ensure_runtime(session_id)
 
     results = []
     logs = []

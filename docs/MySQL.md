@@ -341,18 +341,18 @@ password_hash=$2b$12$...
 
 `workspace_abs_path` 语义说明：
 
-- **启用 Cube Sandbox 时**：本地**镜像目录**路径（Reader / workspace-tree 等读取此路径）；真实文件存储在沙箱 MicroVM 内。
-- 沙箱元数据（含 `sandbox_id`）位于镜像目录下的 `.cube_sandbox_meta.json`，**不入库**。
-- `CUBE_SANDBOX_ENABLED=0` 时：即为实际工作区目录路径。
+- **路径格式**：`{TEMP_FOLDER}/workspaces/<user_id>/<session_id>/`（用户级 + 会话级隔离）。
+- **默认（本地 Runtime）**：即为真实工作区目录；上传、Coder 写码、Reader、Worker 均经 `ensure_runtime` 访问此路径。
+- **启用 Cube Sandbox 时**：DB 中仍存本地镜像路径；沙箱内为真实存储源，适配器写文件后会 sync 到该路径；`.cube_sandbox_meta.json` 位于同目录（不入库）。
 
 示例（逻辑）：
 
 ```text
 session_id=1d9c5c6e-3b2a-4c49-8e4f-5f0c6f91c9d2
-user_id=0
+user_id=12
 title=Q1 销售数据分析
-workspace_abs_path=/data1/pjw/AgentPlatform/tmp/workspaces/1d9c5c6e-3b2a-4c49-8e4f-5f0c6f91c9d2
-# 同目录下 .cube_sandbox_meta.json 含 sandbox_id（不入库）
+workspace_abs_path=/data1/pjw/AgentPlatform/tmp/workspaces/12/1d9c5c6e-3b2a-4c49-8e4f-5f0c6f91c9d2
+# 启用沙箱时，同目录下 .cube_sandbox_meta.json 含 sandbox_id（不入库）
 ```
 
 ### 9.3 `session_content`（会话流式内容版本表）
