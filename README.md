@@ -167,24 +167,22 @@ CREATE TABLE IF NOT EXISTS session_content (
 
 ## 启动方式
 
-### 1) 启动后端（FastAPI）
-
 **前置**：MySQL 已就绪；默认本地 Runtime 无需 Cube。完整步骤见 [`docs/StartInstruction.md`](docs/StartInstruction.md)。启用 Cube Sandbox 时见 [`docs/Cubesandbox-deploy.md`](docs/Cubesandbox-deploy.md)。
 
-在项目根目录执行：
+在**仓库根目录**执行：
 
 ```bash
-cd src
-unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
-# Runner 执行环境（Worker 代码，与主服务隔离）
-export RUNNER_PYTHON="$(conda run -n agentPlatform-runner which python)"
-# 生产环境务必设置 JWT 签名密钥
-export JWT_SECRET_KEY="your-production-secret"
-# 可选：CUBE_SANDBOX_ENABLED=1、E2B_API_URL 等
-uvicorn backend.server:app --host 0.0.0.0 --port 52716
+bash scripts/init-platform.sh             # 首次：建表 + 导入模板 + 生成 fixtures
+bash scripts/start.sh                     # 仅后端 52716
+bash scripts/start.sh --with-frontend     # 后端 + 联调前端 8501
+bash scripts/status.sh                    # 查看状态
+bash scripts/stop.sh --all                # 停止全部
 ```
 
-鉴权说明见 [docs/AUTH.md](docs/AUTH.md)。
+- **后端**：`http://<主机>:52716`
+- **联调前端**：`http://<主机>:8501`（`frontend.py` 多页：流式分析 / 模板分析 / 项目成员；**仅调试用**，正式前端按 [`docs/TemplateAPI.md`](docs/TemplateAPI.md) 对接 HTTP）
+- **验收登录**（可选）：`ACCEPTANCE_MODE=1 bash scripts/init-platform.sh --acceptance` 后，侧栏 `13800000000` / `888888`
+- **演示数据**：运行 `init-platform.sh` 后位于 `tests/fixtures/`（横截面 + 纵向样本）
 
 健康检查：
 
@@ -194,16 +192,7 @@ curl http://localhost:52716/health
 
 返回示例字段：`status`、`service`（`agent-workflow-server`）、`version`（当前为 `1.1`）。
 
-### 2) 启动前端（Streamlit）
-
-另开一个终端，在项目根目录执行：
-
-```bash
-cd src
-streamlit run frontend/frontend.py
-```
-
-前端默认访问后端地址：`http://localhost:52716`
+完整说明见 [`docs/StartInstruction.md`](docs/StartInstruction.md)。鉴权见 [docs/AUTH.md](docs/AUTH.md)。
 
 ---
 
@@ -310,6 +299,7 @@ streamlit run frontend/frontend.py
 ## 相关文档
 
 - 启动说明：[`docs/StartInstruction.md`](docs/StartInstruction.md)
+- 模板分析 API：[`docs/TemplateAPI.md`](docs/TemplateAPI.md)
 - Cube Sandbox 部署：[`docs/Cubesandbox-deploy.md`](docs/Cubesandbox-deploy.md)
 - AgentPlatform 沙箱集成：[`docs/Cubesandbox-agent-integration.md`](docs/Cubesandbox-agent-integration.md)
 - Cube Sandbox 使用说明：[`docs/Cubesandbox-using.md`](docs/Cubesandbox-using.md)

@@ -2,6 +2,7 @@ import json
 import os
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -13,13 +14,21 @@ from backend.analysis_stream import (
     reconnect_streaming_task_generator,
 )
 from backend.api_models import StreamingTaskRequest
-from backend.session_auth import assert_session_owner
+from backend.project_auth import (
+    assert_project_access,
+    assert_project_not_archived,
+    assert_session_access,
+    assert_session_project_not_archived,
+)
+from db.rbac_schema import PERM_ANALYSIS_CREATE, PERM_DATA_UPLOAD
+from backend.project_asset_registry import register_upload, relative_path_for_project_asset
 from db.session_store import SessionStore
 from utils.workspace_manager import (
     init_workspace,
     generate_data_filename,
     build_workspace_tree,
     build_workspace_files_payload,
+    resolve_project_root,
 )
 from utils.workspace_file_ops import write_bytes_file
 from utils.session_memory import persist_workspace_snapshot
@@ -51,7 +60,8 @@ async def handle_session_upload_excel(
     """
     if not session_id.strip():
         raise HTTPException(status_code=400, detail="session_id 不能为空")
-    session_user = assert_session_owner(session_id, current_user_id)
+    session_user = assert_session_access(session_id, current_user_id, PERM_DATA_UPLOAD)
+    assert_session_project_not_archived(session_user)
 
     original_filename = file.filename or ""
     ext = os.path.splitext(original_filename)[1].lower()
@@ -102,6 +112,27 @@ async def handle_session_upload_excel(
     except Exception:
         pass
 
+    project_id = session_user.get("project_id")
+    if project_id:
+        try:
+            proj_root = resolve_project_root(int(project_id))
+            if proj_root:
+                rel = relative_path_for_project_asset(
+                    proj_root,
+                    workspace_abs,
+                    session_id,
+                    os.path.join(workspace_abs, safe_name),
+                )
+                register_upload(
+                    project_id=int(project_id),
+                    session_id=session_id,
+                    relative_path=rel,
+                    original_filename=original_filename,
+                    file_category=classify_file(safe_name),
+                )
+        except Exception:
+            pass
+
     return JSONResponse(
         content={
             "status": "success",
@@ -120,7 +151,7 @@ def build_session_snapshot_response(session_id: str, current_user_id: int) -> JS
     """
     会话快照：前端首次加载或断线重连时调用，返回该会话的「完整累计内容」和当前「版本号」。
     """
-    assert_session_owner(session_id, current_user_id)
+    assert_session_access(session_id, current_user_id)
     try:
         content, version = SessionStore.get_latest_content(session_id)
     except Exception:
@@ -136,7 +167,10 @@ def build_run_analysis_response(body: StreamingTaskRequest, current_user_id: int
     流式分析任务：绑定 session_id，加载工作区上下文，执行完整分析链路；
     后端每产生新片段先更新「完整内容」+ 版本号，再 SSE 推送给前端。
     """
-    assert_session_owner(body.session_id, current_user_id)
+    assert_session_access(body.session_id, current_user_id, PERM_ANALYSIS_CREATE)
+    session_user, _ = SessionStore.get_session_user(body.session_id)
+    if session_user:
+        assert_session_project_not_archived(session_user)
     # 在流水线事件之前持久化用户原始输入，便于快照回放时还原完整对话。
     ok, _, err = SessionStore.append_content(
         body.session_id,
@@ -171,7 +205,7 @@ def build_reconnect_analysis_response(session_id: str, current_user_id: int) -> 
     先把 session 的当前锁存快照推给前端，再在分析未结束时继续推送后续事件。
     """
     sid = session_id.strip()
-    assert_session_owner(sid, current_user_id)
+    assert_session_access(sid, current_user_id, PERM_ANALYSIS_CREATE)
     try:
         return StreamingResponse(
             reconnect_streaming_task_generator(sid),
@@ -185,10 +219,13 @@ def build_reconnect_analysis_response(session_id: str, current_user_id: int) -> 
         raise HTTPException(status_code=500, detail=f"启动重连流失败: {str(e)}")
 
 
-def build_create_session_response(user_id: int) -> JSONResponse:
+def build_create_session_response(user_id: int, project_id: Optional[int] = None) -> JSONResponse:
     """
-    创建会话：后端生成 session_id，初始化工作区，并写入 session_user 映射表。
+    创建会话：后端生成 session_id，在项目下初始化工作区，并写入 session_user 映射表。
+    project_id 省略时自动使用「个人默认」项目。
     """
+    from backend.project_service import ProjectService
+
     if user_id <= 0:
         raise HTTPException(status_code=400, detail="user_id 必须为正整数")
     exists, err = SessionStore.user_exists(user_id)
@@ -197,9 +234,21 @@ def build_create_session_response(user_id: int) -> JSONResponse:
     if not exists:
         raise HTTPException(status_code=404, detail="user_id 不存在，请先登录或注册")
 
+    effective_project_id, err = ProjectService.resolve_project_id(user_id, project_id)
+    if err or effective_project_id <= 0:
+        raise HTTPException(status_code=500, detail=err or "无法解析项目")
+
+    project = assert_project_access(effective_project_id, user_id)
+    assert_project_not_archived(project)
+
     session_id = str(uuid.uuid4())
-    workspace_abs = init_workspace(user_id, session_id)
-    ok, err = SessionStore.create_session(session_id, user_id, workspace_abs)
+    if ProjectService.uses_legacy_session_layout(project):
+        workspace_abs = init_workspace(user_id, session_id)
+    else:
+        workspace_abs = init_workspace(user_id, session_id, project_id=effective_project_id)
+    ok, err = SessionStore.create_session(
+        session_id, user_id, workspace_abs, project_id=effective_project_id
+    )
     if not ok:
         raise HTTPException(status_code=500, detail=f"创建会话失败: {err or 'unknown error'}")
 
@@ -222,6 +271,7 @@ def build_create_session_response(user_id: int) -> JSONResponse:
             "data": {
                 "session_id": session_id,
                 "user_id": user_id,
+                "project_id": effective_project_id,
                 "workspace_abs_path": workspace_abs,
             },
         },
@@ -231,7 +281,7 @@ def build_create_session_response(user_id: int) -> JSONResponse:
 
 def build_user_sessions_response(user_id: int) -> JSONResponse:
     """
-    查询用户会话列表：返回该 user_id 下全部会话（session_id + title）。
+    查询用户可访问会话列表：自己创建的 + 可访问项目内的共享会话。
     """
     if user_id <= 0:
         raise HTTPException(status_code=400, detail="user_id 必须为正整数")
@@ -241,7 +291,7 @@ def build_user_sessions_response(user_id: int) -> JSONResponse:
     if not exists:
         raise HTTPException(status_code=404, detail="user_id 不存在，请先登录或注册")
 
-    sessions, err = SessionStore.get_sessions_by_user_id(user_id)
+    sessions, err = SessionStore.get_accessible_sessions(user_id)
     if err:
         raise HTTPException(status_code=500, detail=f"查询会话列表失败: {err}")
 
@@ -273,7 +323,7 @@ def build_save_session_title_response(
     if not clean_title:
         raise HTTPException(status_code=400, detail="title 不能为空")
 
-    assert_session_owner(sid, current_user_id)
+    assert_session_access(sid, current_user_id)
 
     ok, saved, err = SessionStore.save_session_title_if_absent(sid, clean_title)
     if not ok:
@@ -310,7 +360,7 @@ def build_session_workspace_tree_response(session_id: str, current_user_id: int)
     查询会话工作区目录树：返回该 session_id 对应工作区下的完整层级结构。
     """
     sid = session_id.strip()
-    session_user = assert_session_owner(sid, current_user_id)
+    session_user = assert_session_access(sid, current_user_id)
 
     workspace_abs = str(session_user.get("workspace_abs_path") or "").strip()
     if not workspace_abs:

@@ -5,6 +5,8 @@ import pytest
 
 from utils.workspace_manager import (
     get_workspace_session_id_from_abs_path,
+    init_project_workspace,
+    init_session_in_project,
     init_workspace,
     resolve_workspace_root,
     workspace_path_for,
@@ -65,3 +67,31 @@ def test_session_id_from_abs_path(isolated_workspaces):
 def test_workspace_path_for(isolated_workspaces):
     p = workspace_path_for(99, "abc-123")
     assert p.endswith(os.path.join("99", "abc-123"))
+
+
+def test_project_workspace_layout(isolated_workspaces):
+    project_path = init_project_workspace(user_id=10, project_id=5)
+    assert project_path == str(isolated_workspaces / "10" / "5")
+    for sub in ("raw", "processed", "outputs", "archive", "sessions"):
+        assert os.path.isdir(os.path.join(project_path, sub))
+
+
+def test_session_in_project_layout(isolated_workspaces):
+    sid = str(uuid.uuid4())
+    session_path = init_session_in_project(user_id=10, project_id=5, session_id=sid)
+    expected = os.path.join(str(isolated_workspaces / "10" / "5" / "sessions" / sid))
+    assert session_path == os.path.abspath(expected)
+    assert os.path.isdir(session_path)
+
+
+def test_init_workspace_with_project_id(isolated_workspaces):
+    sid = str(uuid.uuid4())
+    path = init_workspace(user_id=10, session_id=sid, project_id=5)
+    assert path.endswith(os.path.join("5", "sessions", sid))
+
+
+def test_session_id_from_project_layout_path(isolated_workspaces):
+    sid = str(uuid.uuid4())
+    abs_path = init_session_in_project(user_id=10, project_id=5, session_id=sid)
+    nested = os.path.join(abs_path, "data.xlsx")
+    assert get_workspace_session_id_from_abs_path(nested) == sid

@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS {TABLE_USERS} (
     phone VARCHAR(32) DEFAULT NULL COMMENT '手机号',
     email VARCHAR(256) DEFAULT NULL COMMENT '邮箱',
     password_hash VARCHAR(256) NOT NULL COMMENT '密码哈希',
+    platform_role VARCHAR(32) NOT NULL DEFAULT 'user' COMMENT 'admin|user',
+    status VARCHAR(16) NOT NULL DEFAULT 'active' COMMENT 'active|blocked',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '用户表';
@@ -53,6 +55,7 @@ SESSION_USER_COLUMNS = [
     "id",
     "session_id",   # VARCHAR(64) NOT NULL UNIQUE
     "user_id",      # BIGINT NOT NULL
+    "project_id",   # BIGINT DEFAULT NULL COMMENT '所属项目ID'
     "title",        # VARCHAR(255) DEFAULT NULL COMMENT '会话标题'
     "workspace_abs_path",  # VARCHAR(512) NOT NULL COMMENT '工作区绝对路径'
     "created_at",
@@ -66,6 +69,7 @@ class SessionUserRow(TypedDict, total=False):
     id: int
     session_id: str
     user_id: int
+    project_id: Optional[int]
     title: Optional[str]
     workspace_abs_path: str
     created_at: Optional[str]
@@ -77,12 +81,22 @@ CREATE TABLE IF NOT EXISTS {TABLE_SESSION_USER} (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     session_id VARCHAR(64) NOT NULL UNIQUE COMMENT '会话ID',
     user_id BIGINT NOT NULL COMMENT '用户ID',
+    project_id BIGINT NULL COMMENT '所属项目ID',
     title VARCHAR(255) DEFAULT NULL COMMENT '会话标题',
     workspace_abs_path VARCHAR(512) NOT NULL COMMENT '工作区绝对路径',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_user_id (user_id)
+    INDEX idx_user_id (user_id),
+    INDEX idx_project_id (project_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT '会话-用户关联表';
+"""
+
+SESSION_USER_ADD_PROJECT_ID_DDL = f"""
+ALTER TABLE {TABLE_SESSION_USER} ADD COLUMN project_id BIGINT NULL COMMENT '所属项目ID' AFTER user_id;
+"""
+
+SESSION_USER_ADD_PROJECT_ID_INDEX_DDL = f"""
+ALTER TABLE {TABLE_SESSION_USER} ADD INDEX idx_project_id (project_id);
 """
 
 # -------------------------- 会话内容存储表 --------------------------

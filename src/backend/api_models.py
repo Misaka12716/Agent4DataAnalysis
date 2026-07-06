@@ -16,6 +16,7 @@ class StreamingTaskRequest(BaseModel):
 
     session_id: str
     input_data: str
+    template_id: Optional[int] = None
 
 
 class ReconnectStreamRequest(BaseModel):

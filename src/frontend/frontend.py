@@ -11,9 +11,13 @@ if str(_SRC) not in sys.path:
 
 import streamlit as st
 import httpx
-import json
 
-from reader.file_types import guess_upload_mime, upload_allowed_extensions
+from frontend.page_utils import (
+    apply_login_payload,
+    render_acceptance_login_button,
+    refresh_user_profile,
+    resolve_project_id_for_permission,
+)
 
 # 后端地址（与 backend/server 默认端口一致）
 API_BASE = "http://localhost:52716"
@@ -50,6 +54,8 @@ def _render_session_list_buttons(sessions: list, key_prefix: str) -> None:
         if not sid:
             continue
         label = f"{idx + 1}. {title}"
+        if str((item or {}).get("access") or "") == "shared":
+            label += " (共享)"
         safe_key = f"{key_prefix}_{idx}_{sid.replace('-', '_')}"
         if st.button(label, key=safe_key, use_container_width=True, help=sid):
             st.session_state["session_id"] = sid
@@ -81,6 +87,63 @@ def _fetch_user_sessions_list(api_base: str):
         return [], f"列表失败 {e.response.status_code}: {_short_text(e.response.text, 200)}"
     except Exception as e:
         return [], _short_exc(e)
+
+
+def _fetch_project_list(api_base: str):
+    try:
+        r = httpx.get(
+            f"{api_base.rstrip('/')}/project/list",
+            headers=_auth_headers(),
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        data = r.json()
+        projects = ((data.get("data") or {}).get("projects")) or []
+        return projects, None
+    except httpx.HTTPStatusError as e:
+        return [], f"项目列表失败 {e.response.status_code}: {_short_text(e.response.text, 200)}"
+    except Exception as e:
+        return [], _short_exc(e)
+
+
+def _fetch_project_sessions(api_base: str, project_id: int):
+    try:
+        r = httpx.get(
+            f"{api_base.rstrip('/')}/project/{project_id}/sessions",
+            headers=_auth_headers(),
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        data = r.json()
+        sessions = ((data.get("data") or {}).get("sessions")) or []
+        return sessions, None
+    except httpx.HTTPStatusError as e:
+        return [], f"项目会话列表失败 {e.response.status_code}: {_short_text(e.response.text, 200)}"
+    except Exception as e:
+        return [], _short_exc(e)
+
+
+def _render_project_list_buttons(projects: list, key_prefix: str) -> None:
+    if not projects:
+        st.caption("暂无项目。")
+        return
+    for idx, item in enumerate(projects):
+        pid = int((item or {}).get("id") or 0)
+        name = str((item or {}).get("name") or "").strip() or f"项目 {pid}"
+        status = str((item or {}).get("status") or "active").strip()
+        if pid <= 0:
+            continue
+        label = f"{idx + 1}. {name}"
+        if (item or {}).get("is_default"):
+            label = f"{idx + 1}. {name} ★"
+        if status == "archived":
+            label += " [已归档]"
+        safe_key = f"{key_prefix}_{idx}_{pid}"
+        if st.button(label, key=safe_key, use_container_width=True):
+            st.session_state["current_project_id"] = pid
+            st.session_state["session_id"] = ""
+            st.session_state["_reset_session_id"] = ""
+            st.rerun()
 
 
 st.set_page_config(
@@ -159,11 +222,8 @@ def _login_dialog() -> None:
                         )
                         r.raise_for_status()
                         data = r.json()
-                        login_data = data.get("data") or {}
-                        st.session_state["current_user_id"] = int(login_data.get("user_id") or 0)
-                        st.session_state["current_username"] = str(login_data.get("username") or "")
-                        st.session_state["access_token"] = str(login_data.get("access_token") or "")
-                        st.session_state["logged_in_phone"] = phone
+                        apply_login_payload(data, phone)
+                        refresh_user_profile()
                         st.success("登录成功")
                         st.rerun()
                     except httpx.HTTPStatusError as e:
@@ -230,8 +290,13 @@ def _logout_dialog() -> None:
             st.session_state["current_user_id"] = 0
             st.session_state["current_username"] = ""
             st.session_state["access_token"] = ""
+            st.session_state["auth_token"] = ""
             st.session_state["logged_in_phone"] = ""
+            st.session_state["platform_role"] = ""
+            st.session_state["permissions_summary"] = {}
             st.session_state["last_user_sessions"] = []
+            st.session_state["last_user_projects"] = []
+            st.session_state["current_project_id"] = 0
             st.rerun()
 
 
@@ -243,8 +308,16 @@ if "current_username" not in st.session_state:
     st.session_state["current_username"] = ""
 if "last_user_sessions" not in st.session_state:
     st.session_state["last_user_sessions"] = []
+if "last_user_projects" not in st.session_state:
+    st.session_state["last_user_projects"] = []
+if "current_project_id" not in st.session_state:
+    st.session_state["current_project_id"] = 0
 if "logged_in_phone" not in st.session_state:
     st.session_state["logged_in_phone"] = ""
+if "platform_role" not in st.session_state:
+    st.session_state["platform_role"] = ""
+if "permissions_summary" not in st.session_state:
+    st.session_state["permissions_summary"] = {}
 
 if "session_id" not in st.session_state:
     st.session_state["session_id"] = ""
@@ -266,6 +339,9 @@ with st.sidebar:
             if login_phone:
                 st.caption("号码仅存于浏览器会话，用于展示与联调。")
             st.markdown(f"**昵称** {current_username or '—'}")
+            platform_role = str(st.session_state.get("platform_role") or "user")
+            if platform_role == "admin":
+                st.markdown("**角色** 平台管理员")
             if st.button("修改昵称", use_container_width=True, key="sidebar_btn_edit_username"):
                 _edit_username_dialog()
             st.caption(f"用户 ID `{current_user_id}`")
@@ -277,6 +353,7 @@ with st.sidebar:
             st.caption("登录后将自动加载您的会话列表，点击可切换当前会话。")
             if st.button("登录 / 注册", type="primary", use_container_width=True, key="sidebar_btn_open_login"):
                 _login_dialog()
+            render_acceptance_login_button(key="sidebar_acceptance_login")
     st.divider()
     st.markdown("### 后端连接状态")
     api_base = st.text_input("后端 API 地址", value=API_BASE, key="api_base")
@@ -290,6 +367,59 @@ with st.sidebar:
         st.error(f"未连接: {_short_exc(e)}")
 
     st.divider()
+    st.markdown("### 项目")
+    current_user_id = int(st.session_state.get("current_user_id", 0) or 0)
+    current_project_id = int(st.session_state.get("current_project_id", 0) or 0)
+    if current_user_id > 0:
+        new_project_name = st.text_input(
+            "新项目名称",
+            value=f"项目-{current_user_id}",
+            key="sidebar_new_project_name",
+        )
+        col_create, col_refresh = st.columns(2)
+        with col_create:
+            if st.button("创建项目", key="sidebar_btn_create_project", use_container_width=True):
+                try:
+                    r = httpx.post(
+                        f"{api_base.rstrip('/')}/project/create",
+                        headers=_auth_headers(),
+                        json={"name": (new_project_name or f"项目-{current_user_id}").strip()},
+                        timeout=10.0,
+                    )
+                    r.raise_for_status()
+                    resp = r.json()
+                    new_pid = int(((resp.get("data") or {}).get("id") or 0))
+                    if new_pid > 0:
+                        st.session_state["current_project_id"] = new_pid
+                        st.success(f"项目已创建: {new_pid}")
+                        st.rerun()
+                except httpx.HTTPStatusError as e:
+                    st.error(f"创建项目失败 {e.response.status_code}: {_short_text(e.response.text, 200)}")
+                except Exception as e:
+                    st.error(_short_exc(e))
+        with col_refresh:
+            if st.button("刷新", key="sidebar_btn_refresh_projects", use_container_width=True):
+                st.rerun()
+        projects, perr = _fetch_project_list(api_base)
+        if perr:
+            st.session_state["last_user_projects"] = []
+            st.error(perr)
+        else:
+            st.session_state["last_user_projects"] = projects
+            if current_project_id <= 0:
+                for item in projects:
+                    if (item or {}).get("is_default"):
+                        current_project_id = int((item or {}).get("id") or 0)
+                        st.session_state["current_project_id"] = current_project_id
+                        break
+        st.caption("点击项目切换当前工作上下文。「个人默认」包含历史无项目会话。")
+        _render_project_list_buttons(st.session_state.get("last_user_projects") or [], key_prefix="proj")
+        if current_project_id > 0:
+            st.caption(f"当前项目 ID: `{current_project_id}`")
+    else:
+        st.caption("登录后可创建并切换项目。")
+
+    st.divider()
     st.markdown("### 会话")
     session_id_input = st.text_input(
         "会话 ID (Session ID)",
@@ -297,14 +427,19 @@ with st.sidebar:
         help="同一会话内上传与分析共用此 ID",
     )
     session_id = session_id_input or st.session_state["session_id"]
-    current_user_id = int(st.session_state.get("current_user_id", 0) or 0)
     current_username = st.session_state.get("current_username", "")
     if current_user_id > 0:
+        if current_project_id <= 0:
+            st.caption("将使用「个人默认」项目创建会话（含历史会话）。")
         if st.button("创建新会话（后端生成）", key="sidebar_btn_create_session"):
             try:
+                payload = {}
+                if current_project_id > 0:
+                    payload["project_id"] = current_project_id
                 r = httpx.post(
                     f"{api_base.rstrip('/')}/session/create",
                     headers=_auth_headers(),
+                    json=payload,
                     timeout=10.0,
                 )
                 r.raise_for_status()
@@ -325,194 +460,42 @@ with st.sidebar:
         st.caption("未登录时无法创建会话：请使用侧栏 **账户** 中的「登录 / 注册」。")
 
     if current_user_id > 0:
-        sessions, err = _fetch_user_sessions_list(api_base)
+        if current_project_id > 0:
+            sessions, err = _fetch_project_sessions(api_base, current_project_id)
+            list_title = "当前项目会话"
+        else:
+            sessions, err = _fetch_user_sessions_list(api_base)
+            list_title = "全部会话（含历史无项目）"
         if err:
             st.session_state["last_user_sessions"] = []
             st.error(err)
         else:
             st.session_state["last_user_sessions"] = sessions
-        st.markdown("##### 我的会话")
+        st.markdown(f"##### {list_title}")
         st.caption("点击一条可切换当前会话（用于上传、工作区与流式分析）。")
         _render_session_list_buttons(st.session_state.get("last_user_sessions") or [], key_prefix="me")
     else:
         st.caption("登录后可查看并切换您的会话列表。")
 
-# 主区顶部
-sid_for_display = session_id.strip() or st.session_state.get("session_id", "") or ""
-st.title("数据科学多智能体平台")
-st.markdown("大语言模型驱动的多智能体协作 · 会话与工作区 · 流式推理 — **联调与演示控制台**")
-if sid_for_display:
-    st.caption(f"完整会话 ID: `{sid_for_display}`")
+st.session_state["session_id"] = session_id
 
-col_stream, col_tools = st.columns([2.05, 1.0], gap="large")
+from frontend.pages.admin_users import render_admin_users_page
+from frontend.pages.project_members import render_project_members_page
+from frontend.pages.streaming_analysis import render_streaming_analysis_page
+from frontend.pages.template_analysis import render_template_analysis_page
 
-with col_stream:
-    st.subheader("流式分析")
-    st.markdown("中间主区域用于 SSE 流式输出：报告片段与流内快照帧。")
-    input_data = st.text_area(
-        "分析需求 (input_data)",
-        value="请结合工作区中的数据与文件，做简要理解与总结，并给出可继续深入的分析方向。",
-        height=80,
-        key="input_data",
-    )
-    with st.container(border=True):
-        st.markdown("**实时输出**")
-        stream_placeholder = st.empty()
+_nav_pages = [
+    st.Page(
+        lambda: render_streaming_analysis_page(api_base, session_id),
+        title="流式分析",
+        icon="📊",
+        default=True,
+    ),
+    st.Page(render_template_analysis_page, title="模板分析", icon="📋"),
+    st.Page(render_project_members_page, title="项目成员", icon="👥"),
+]
+if str(st.session_state.get("platform_role") or "") == "admin":
+    _nav_pages.append(st.Page(render_admin_users_page, title="用户管理", icon="👤"))
 
-    def _run_sse(endpoint: str, req_json: dict, timeout_seconds: float = 300.0):
-        log_events = []
-        report_parts = []
-        snapshot_content = ""
-        snapshot_version = 0
-        try:
-            with httpx.stream(
-                "POST",
-                f"{api_base.rstrip('/')}{endpoint}",
-                json=req_json,
-                headers=_auth_headers(),
-                timeout=timeout_seconds,
-            ) as resp:
-                resp.raise_for_status()
-                for line in resp.iter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    try:
-                        payload = json.loads(line[5:].strip())
-                        log_events.append(payload)
-                        event_type = str(payload.get("type") or "")
-                        if event_type == "snapshot":
-                            snapshot_content = str(payload.get("content") or "")
-                            snapshot_version = int(payload.get("version") or 0)
-                        elif event_type == "report_chunk":
-                            report_parts.append(str(payload.get("content") or ""))
-                        with stream_placeholder.container():
-                            st.caption(
-                                f"已接收 {len(log_events)} 条事件 · 快照版本 {snapshot_version} · 报告 {len(''.join(report_parts))} 字"
-                            )
-                            if snapshot_content:
-                                st.markdown("**快照锁存（重连首帧）**")
-                                st.text_area(
-                                    "snapshot_content_view",
-                                    value=snapshot_content,
-                                    height=180,
-                                    key=f"snapshot_content_view_{endpoint}",
-                                    label_visibility="collapsed",
-                                )
-                            if report_parts:
-                                st.markdown("**报告（流式）**")
-                                st.markdown("".join(report_parts))
-                    except json.JSONDecodeError:
-                        log_events.append({"raw": line[:200]})
-        except httpx.HTTPStatusError as e:
-            st.error(f"请求失败 {e.response.status_code}: {_short_text(e.response.text, 200)}")
-        except Exception as e:
-            st.error(_short_exc(e))
-
-        if log_events:
-            with st.expander("查看全部 SSE 事件", expanded=False):
-                st.json(log_events)
-
-    b_run, b_rec = st.columns(2)
-    with b_run:
-        if st.button("开始流式分析", key="btn_run_analysis"):
-            if not session_id:
-                st.warning("请先在侧栏填写会话 ID")
-            else:
-                _run_sse(
-                    "/run-analysis",
-                    {"session_id": session_id, "input_data": input_data},
-                    timeout_seconds=300.0,
-                )
-    with b_rec:
-        if st.button("断线恢复（reconnect）", key="btn_run_analysis_reconnect"):
-            if not session_id:
-                st.warning("请先在侧栏填写会话 ID")
-            else:
-                _run_sse(
-                    "/run-analysis/reconnect",
-                    {"session_id": session_id},
-                    timeout_seconds=300.0,
-                )
-
-with col_tools:
-    with st.container(border=True):
-        st.markdown("### 上传文件")
-        st.caption(
-            "支持表格（xlsx / xls / csv / tsv）、图片（png / jpg / jpeg / gif / webp / bmp）、"
-            "文本（txt / md / json / yaml / yml / log / xml / html / htm）。可多选批量上传。"
-        )
-        uploaded_list = st.file_uploader(
-            "选择文件（可多选）",
-            type=upload_allowed_extensions(),
-            accept_multiple_files=True,
-            key="upload_session_data",
-        )
-        if uploaded_list and session_id:
-            names = [getattr(f, "name", "?") for f in uploaded_list]
-            st.caption(f"已选 **{len(uploaded_list)}** 个文件：" + "、".join(names[:8]) + (" …" if len(names) > 8 else ""))
-            if st.button("全部上传", key="btn_upload"):
-                ok_paths: list[str] = []
-                ok_details: list = []
-                err_msgs: list[str] = []
-                with st.spinner(f"上传中（{len(uploaded_list)} 个文件）…"):
-                    for uf in uploaded_list:
-                        fname = getattr(uf, "name", "file")
-                        try:
-                            uf.seek(0)
-                            raw = uf.read()
-                            mime = guess_upload_mime(fname, getattr(uf, "type", None))
-                            r = httpx.post(
-                                f"{api_base.rstrip('/')}/session/upload-excel",
-                                files={"file": (fname, raw, mime)},
-                                data={"session_id": session_id},
-                                headers=_auth_headers(),
-                                timeout=120.0,
-                            )
-                            r.raise_for_status()
-                            resp_body = r.json()
-                            rp = str(resp_body.get("relative_path") or "").strip()
-                            ok_paths.append(rp or fname)
-                            ok_details.append({"file": fname, "response": resp_body})
-                        except httpx.HTTPStatusError as e:
-                            err_msgs.append(f"{fname}: HTTP {e.response.status_code} {_short_text(e.response.text, 120)}")
-                        except Exception as e:
-                            err_msgs.append(f"{fname}: {_short_exc(e)}")
-                if ok_paths:
-                    st.success(f"成功 **{len(ok_paths)}** 个：" + "；".join(ok_paths[:12]) + (" …" if len(ok_paths) > 12 else ""))
-                    with st.expander("各文件响应 JSON", expanded=False):
-                        st.json(ok_details)
-                for msg in err_msgs:
-                    st.error(msg)
-        elif not session_id:
-            st.caption("请先在侧栏填写或选择 Session ID。")
-
-        st.divider()
-        st.markdown("### 工作区目录与文件")
-        st.caption("拉取目录树与已落盘文件元数据。")
-        if st.button("拉取工作区", key="btn_workspace_tree"):
-            if not session_id:
-                st.warning("请先在侧栏填写会话 ID")
-            else:
-                with st.spinner("拉取中..."):
-                    try:
-                        r = httpx.get(
-                            f"{api_base.rstrip('/')}/session/workspace-tree",
-                            params={"session_id": session_id},
-                            headers=_auth_headers(),
-                            timeout=30.0,
-                        )
-                        r.raise_for_status()
-                        data = r.json()
-                        payload = data.get("data") or {}
-                        tree = payload.get("tree") or {}
-                        files = payload.get("files") or []
-
-                        st.success(f"文件数: **{len(files)}**")
-                        with st.expander("目录树（tree）", expanded=False):
-                            st.json(tree)
-                        with st.expander("实际文件（files）", expanded=False):
-                            st.json(files)
-                    except httpx.HTTPStatusError as e:
-                        st.error(f"请求失败 {e.response.status_code}: {_short_text(e.response.text, 200)}")
-                    except Exception as e:
-                        st.error(_short_exc(e))
+pg = st.navigation(_nav_pages)
+pg.run()

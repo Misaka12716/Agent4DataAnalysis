@@ -1,0 +1,109 @@
+{
+  "template_name": "焦虑障碍分析模板",
+  "disease_type": "anxiety",
+  "description": "基于HAMA/GAD-7的焦虑障碍标准化分析模板，覆盖数据质控、量表分析、治疗反应、抑郁-焦虑共病与用药关联",
+  "scales": [
+    {
+      "name": "HAMA",
+      "full_name": "Hamilton Anxiety Rating Scale",
+      "items": 14,
+      "range": "0-56",
+      "reference": "Hamilton M (1959) Br J Med Psychol 32:50-55",
+      "severity": {
+        "mild": 17,
+        "moderate": 25,
+        "severe": 30
+      },
+      "factors": [
+        {
+          "name": "psychic_anxiety",
+          "items": "1-6,14"
+        },
+        {
+          "name": "somatic_anxiety",
+          "items": "7-13"
+        }
+      ]
+    },
+    {
+      "name": "GAD-7",
+      "full_name": "Generalized Anxiety Disorder 7-item scale",
+      "items": 7,
+      "range": "0-21",
+      "reference": "Spitzer RL et al (2006) Arch Intern Med 166:1092-1097",
+      "severity": {
+        "minimal": 0,
+        "mild": 5,
+        "moderate": 10,
+        "severe": 15
+      }
+    }
+  ],
+  "analysis_steps": [
+    {
+      "step": 1,
+      "name": "数据质控",
+      "operator": "missing_summary",
+      "description": "缺失率/数据类型/唯一值统计"
+    },
+    {
+      "step": 2,
+      "name": "异常值检测",
+      "operator": "outlier_iqr_flag",
+      "description": "Tukey IQR围栏标记"
+    },
+    {
+      "step": 3,
+      "name": "缺失值填补",
+      "operator": "data_imputation",
+      "description": "median填补策略"
+    },
+    {
+      "step": 4,
+      "name": "描述统计",
+      "operator": "describe_full",
+      "description": "12项统计量"
+    },
+    {
+      "step": 5,
+      "name": "HAMA因子分析",
+      "operator": "factor_score",
+      "description": "2因子: psychic_anxiety(精神性) vs somatic_anxiety(躯体性)"
+    },
+    {
+      "step": 6,
+      "name": "治疗反应评估",
+      "operator": "responder_analysis",
+      "description": ">=50%下降为responder"
+    },
+    {
+      "step": 7,
+      "name": "抑郁-焦虑共病分析",
+      "operator": "correlation",
+      "description": "HAMA与HAMD/PHQ-9的Pearson/Spearman相关矩阵"
+    },
+    {
+      "step": 8,
+      "name": "共病模式",
+      "operator": "comorbidity",
+      "description": "抑郁-焦虑共现率/相对风险比"
+    },
+    {
+      "step": 9,
+      "name": "用药与结局关联",
+      "operator": "ordinal_regression",
+      "description": "累积logit有序回归"
+    }
+  ],
+  "report_structure": [
+    "研究对象基本信息",
+    "数据质控结果",
+    "HAMA量表分析",
+    "治疗反应分析",
+    "抑郁-焦虑共病分析",
+    "用药与结局关联",
+    "结论与建议"
+  ],
+  "version": "2.0.0",
+  "last_updated": "2025-06-30"
+}

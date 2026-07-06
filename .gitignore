@@ -1,13 +1,68 @@
-__pycache__/
-.vscode/
+# Python
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
 .venv/
-logs/
+venv/
+ENV/
+
+# Local secrets / env files
+.env
+.env.*
+!.env.example
+!.env.*.example
+.jwt_dev_secret
+*.pem
+*.key
+
+# IDE / editor
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime / local data (do not commit)
 tmp/
+workspace/
+uploads/
+logs/
+template_runs/
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# Test / coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Legacy / one-off trees
 input/
 temp_load/
-uploads/
 tools/
 abolished/
+2.1.5-template-fusion/
 
 # CubeSandbox-specific ignore rules (scoped to avoid affecting other modules)
 /CubeSandbox/**/target/

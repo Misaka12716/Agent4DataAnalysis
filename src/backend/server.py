@@ -4,6 +4,16 @@ import os
 os.environ["NO_PROXY"] = "*"
 os.environ["HTTPX_NO_PROXY"] = "1"
 
+try:
+    from pathlib import Path
+    from dotenv import load_dotenv
+
+    _root_env = Path(__file__).resolve().parents[2] / ".env"
+    if _root_env.is_file():
+        load_dotenv(_root_env, override=False)
+except ImportError:
+    pass
+
 from fastapi import Depends, FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from backend.api_models import (
@@ -150,6 +160,10 @@ async def update_username(
 ):
     return build_update_username_response(current_user.user_id, body.username.strip())
 
+
+from backend.route_registry import register_modular_routes
+
+register_modular_routes(app)
 
 # -------------------------- 启动服务器 --------------------------
 if __name__ == "__main__":

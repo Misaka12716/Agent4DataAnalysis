@@ -24,12 +24,16 @@
 - 登录成功后响应 `data.access_token`
 - 后续请求携带请求头：`Authorization: Bearer <access_token>`
 - 服务端从 token 解析当前用户，**不再接受**客户端传入的 `user_id`
-- 所有 `session_id` 相关操作会校验该会话是否属于当前用户（`session_user.user_id`）
+- 会话与项目采用 RBAC：所有者、项目成员或平台 admin 可访问（详见 [RBAC.md](RBAC.md)）
+- 已归档项目（`projects.status=archived`）禁止：新建会话、上传、发起分析
 
 | HTTP 状态 | code | 含义 |
 |---|---|---|
 | 401 | 6 | 未携带 token、token 无效或已过期 |
-| 403 | 7 | token 有效，但 session 不属于当前用户 |
+| 403 | 3 | 用户已被封禁 |
+| 403 | 7 | token 有效，但 session / project 不属于当前用户且非项目成员 |
+| 403 | 8 | 项目已归档，禁止写操作 |
+| 403 | 9 | 权限不足（缺少对应操作权限码） |
 
 ---
 
@@ -41,7 +45,17 @@
 | `/auth/login-with-sms` | `POST` | 短信登录/注册一体：校验后返回 JWT 与用户信息（公开） |
 | `/auth/me` | `GET` | 获取当前登录用户信息（需 Bearer Token） |
 | `/auth/update-username` | `POST` | 修改当前用户姓名/昵称（需 Bearer Token） |
-| `/session/create` | `POST` | 创建会话：为当前用户生成 session_id 与工作区（需 Bearer Token） |
+| `/project/create` | `POST` | 创建项目（需 Bearer Token） |
+| `/project/list` | `GET` | 查询当前用户项目列表（需 Bearer Token） |
+| `/project/{project_id}` | `GET` | 查询项目详情（需 Bearer Token + 项目归属） |
+| `/project/{project_id}` | `PUT` | 重命名项目（需 Bearer Token + 项目归属；个人默认不可改名） |
+| `/project/{project_id}/tree` | `GET` | 查询项目 raw/outputs/archive 目录树 |
+| `/project/{project_id}/archive` | `POST` | 归档项目（需 Bearer Token + 项目归属） |
+| `/project/{project_id}/restore` | `POST` | 恢复项目（需 Bearer Token + 项目归属） |
+| `/project/{project_id}/upload` | `POST` | 上传文件到项目 raw/ 目录（需 Bearer Token + 项目归属） |
+| `/project/{project_id}/assets` | `GET` | 查询项目资产列表（需 Bearer Token + 项目归属） |
+| `/project/{project_id}/sessions` | `GET` | 查询项目下会话列表（需 Bearer Token + 项目归属） |
+| `/session/create` | `POST` | 创建会话：在指定项目下生成 session_id 与工作区（需 Bearer Token + project_id） |
 | `/session/save-title` | `POST` | 保存会话标题：按 session_id 首次写入标题（需 Bearer Token + 会话归属） |
 | `/session/list` | `GET` | 查询当前用户会话列表（需 Bearer Token） |
 | `/session/upload-excel` | `POST` | 上传文件到会话工作区（需 Bearer Token + 会话归属） |
@@ -215,15 +229,25 @@
 
 ### 3.5 创建会话
 - 路径：`POST /session/create`
-- 处理函数：`build_create_session_response(user_id: int)`
+- 处理函数：`build_create_session_response(user_id, project_id)`
 - 鉴权：`Authorization: Bearer <access_token>`（必填）
-- 请求体：无（或空 JSON `{}`）
+- Content-Type：`application/json`
+- 请求体参数（JSON）：
+  - `project_id: int`（**可选**；省略时自动归入该用户的「个人默认」项目 `__personal_default__`）
+- 请求体示例：
+```json
+{
+  "project_id": 1
+}
+```
+- 省略 `project_id` 时也可传空对象 `{}`。
 - 成功返回格式：`application/json`
   - `status: str`
   - `msg: str`
   - `data.session_id: str`
   - `data.user_id: int`
-  - `data.workspace_abs_path: str`（会话工作区绝对路径，形如 `.../workspaces/<user_id>/<session_id>`）
+  - `data.project_id: int`
+  - `data.workspace_abs_path: str`（会话工作区绝对路径，形如 `.../workspaces/<user_id>/<project_id>/sessions/<session_id>`）
 - 成功返回示例（`200`）：
 ```json
 {
@@ -232,19 +256,20 @@
   "data": {
     "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
     "user_id": 12,
-    "workspace_abs_path": "/data1/pjw/AgentPlatform/tmp/workspaces/12/9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
+    "project_id": 1,
+    "workspace_abs_path": "/data1/pjw/AgentPlatform/tmp/workspaces/12/1/sessions/9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
   }
 }
 ```
 - 常见错误：
   - `401`：`code=6`，未登录或 token 无效/过期
+  - `403`：`code=8`，项目已归档
   - `500`：数据库写入失败
 - 实现逻辑：
   1. 从 Bearer Token 解析当前 `user_id`。
-  2. 生成 UUID 作为 `session_id`，调用 `init_workspace(user_id, session_id)` 创建 `workspaces/<user_id>/<session_id>/`。
-  3. 调用 `ensure_runtime(session_id)` 绑定本地 Runtime（默认）；若 `CUBE_SANDBOX_ENABLED=1` 且 Cube 可用，factory 内部尝试沙箱适配器。
-  4. 写入 `session_user(session_id, user_id, workspace_abs_path)`。
-  5. 返回 `session_id`，后续请求只需传该值（且须属于当前用户）。
+  2. 若未传 `project_id`，自动解析/创建「个人默认」项目，并将该用户历史无 `project_id` 的会话归属到该项目。
+  3. 校验项目归属且未归档。
+  4. 「个人默认」项目下新建会话仍使用旧路径 `workspaces/<user_id>/<session_id>/`；其他项目使用 `.../<project_id>/sessions/<session_id>/`。
 
 ---
 
@@ -598,21 +623,94 @@ data: {"type":"snapshot","session_id":"...","content":"...","version":35,"timest
 
 ---
 
+### 3.14 创建项目
+- 路径：`POST /project/create`
+- 请求体：`{"name": "项目名称"}`（不可使用系统保留名「个人默认」/`__personal_default__`）
+- 成功返回 `201`，`data` 含 `id`、`name`、`status`、`workspace_abs_path` 等。
+
+### 3.15 查询项目列表
+- 路径：`GET /project/list`
+- 成功返回当前用户全部项目；首项为「个人默认」（`is_default: true`），含 `session_count`。
+
+### 3.16 查询项目详情
+- 路径：`GET /project/{project_id}`
+- 成功返回项目详情及 `subdirs`（raw/processed/outputs/archive/sessions 是否存在）。
+
+### 3.16.1 重命名项目
+- 路径：`PUT /project/{project_id}`
+- 请求体：`{"name": "新项目名称"}`（不可使用系统保留名；「个人默认」不可重命名）
+- 成功返回更新后的项目详情。
+
+### 3.16.2 查询项目目录树
+- 路径：`GET /project/{project_id}/tree`
+- 成功返回 `data.trees`，含 `raw`、`outputs`、`archive` 三节点的层级结构（复用 workspace-tree 格式）。
+
+### 3.17 归档 / 恢复项目
+- 路径：`POST /project/{project_id}/archive` | `POST /project/{project_id}/restore`
+- 「个人默认」项目不可归档；其他项目归档时先将 `raw/`、`outputs/` 快照至 `archive/<YYYYMMDD-HHMMSS>/`（含 `manifest.json`），再设置 `status=archived`。
+- 归档成功响应 `data.archive_snapshot_path` 为快照相对项目根的路径（如 `archive/20260705-153045`）。
+- 归档后禁止新建会话、上传、分析。
+
+### 3.18 项目级上传
+- 路径：`POST /project/{project_id}/upload`
+- Content-Type：`multipart/form-data`，字段 `file`
+- 文件写入 `raw/`，并登记 `project_assets`（`asset_type=upload`）。
+
+### 3.19 查询项目资产
+- 路径：`GET /project/{project_id}/assets`
+- 返回 `project_assets` 列表（含 upload / analysis_output）。
+- 分析/模板执行结束后，关键产出会复制到 `outputs/<session_id>/` 并以 `outputs/...` 路径登记；同 `(project_id, relative_path)` 去重。
+
+### 3.20 查询项目下会话
+- 路径：`GET /project/{project_id}/sessions`
+- 返回 `session_user WHERE project_id=?` 的 session_id / title 列表。
+
+### 3.21 平台用户管理（admin）
+- `POST /admin/users` — 创建用户（body: username, phone, platform_role, status）
+- `GET /admin/users?offset=&limit=` — 用户列表
+- `GET /admin/users/{user_id}` — 用户详情
+- `PUT /admin/users/{user_id}` — 更新用户
+
+### 3.22 项目成员管理
+- `GET /project/{project_id}/members`
+- `POST /project/{project_id}/members` — body: user_id, role, permissions[]
+- `PUT /project/{project_id}/members/{user_id}`
+- `DELETE /project/{project_id}/members/{user_id}`
+
+### 3.23 项目文件下载 / 删除
+- `GET /project/{project_id}/download?relative_path=raw/data.csv` — 需 `data_download`
+- `DELETE /project/{project_id}/assets` — body: `{ "relative_path": "..." }`，需 `data_delete`
+
+### 3.24 占位任务 API
+- `POST /project/{project_id}/tasks` — body: task_type, session_id?, payload?
+- `GET /project/{project_id}/tasks`
+- `GET /project/{project_id}/tasks/{task_id}`
+
+完整 RBAC 说明见 [RBAC.md](RBAC.md)。
+
+---
+
 ## 4. 数据存储与接口关系
 
 ### 4.1 工作区与执行 Runtime
 
-- **目录布局**：`{TEMP_FOLDER}/workspaces/<user_id>/<session_id>/`（先按用户隔离，再按会话隔离）。
-- **权威路径**：`session_user.workspace_abs_path` 写入创建会话时的绝对路径；后续 `resolve_workspace_root(session_id)` 优先读 DB。
+- **项目目录布局**：`{TEMP_FOLDER}/workspaces/<user_id>/<project_id>/`，含子目录 `raw/`、`processed/`、`outputs/`、`archive/`、`sessions/`。
+- **新会话目录**：`.../<project_id>/sessions/<session_id>/`。
+- **历史会话目录**（无 project_id）：`{TEMP_FOLDER}/workspaces/<user_id>/<session_id>/`（向后兼容）。
+- **权威路径**：`session_user.workspace_abs_path` / `projects.workspace_abs_path`；`resolve_workspace_root(session_id)` 优先读 DB。
 - **统一执行层**：[`src/runtime/`](../src/runtime/) 提供 `ensure_runtime(session_id)`，上层通过 `runtime.files.*` / `runtime.commands.run` 读写与执行，不再在各模块分散判断沙箱开关。
 - **默认后端**：本地 Runtime（`CUBE_SANDBOX_ENABLED=0`），Worker 使用 **`RUNNER_PYTHON`** 指向的独立 conda 环境（如 `agentPlatform-runner`），与运行 FastAPI 的 `agentPlatform` 环境分离。
 - **可选后端**：`CUBE_SANDBOX_ENABLED=1` 时经 `SandboxRuntimeAdapter` 走 Cube MicroVM；不可用时 factory 自动降级本地 Runtime。
 
 - `session_user`：
   - 由 `/session/create` 创建并维护
-  - 记录 `session_id -> user_id + title + workspace_abs_path`
+  - 记录 `session_id -> user_id + project_id(可空) + title + workspace_abs_path`
   - `/session/save-title` 按 `session_id` 首次写入 `title`
   - `/session/list` 按 token 中的当前 `user_id` 读取其全部 `session_id/title`
+  - `/project/{id}/sessions` 按 `project_id` 过滤
+- `projects` / `project_assets`：
+  - 由 `/project/create` 等接口维护
+  - `project_assets` 登记上传与分析产出（`asset_type`: `upload` | `analysis_output`）
 - `session_content`：
   - 由 `/run-analysis` 的流式过程持续写入
   - 每条事件对应一个新版本（`version` 递增）
@@ -665,19 +763,29 @@ curl -X POST "http://localhost:52716/auth/update-username" \
   }'
 ```
 
-### 5.5 创建会话
+### 5.5 创建项目
 ```bash
-curl -X POST "http://localhost:52716/session/create" \
-  -H "Authorization: Bearer <access_token>"
+curl -X POST "http://localhost:52716/project/create" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -d '{"name": "Q1 分析项目"}'
 ```
 
-### 5.6 查询用户会话列表
+### 5.6 创建会话（需 project_id）
+```bash
+curl -X POST "http://localhost:52716/session/create" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -d '{"project_id": 1}'
+```
+
+### 5.7 查询用户会话列表
 ```bash
 curl "http://localhost:52716/session/list" \
   -H "Authorization: Bearer <access_token>"
 ```
 
-### 5.7 保存会话标题
+### 5.8 保存会话标题
 ```bash
 curl -X POST "http://localhost:52716/session/save-title" \
   -H "Content-Type: application/json" \
@@ -688,7 +796,7 @@ curl -X POST "http://localhost:52716/session/save-title" \
   }'
 ```
 
-### 5.8 上传数据文件
+### 5.9 上传数据文件
 ```bash
 curl -X POST "http://localhost:52716/session/upload-excel" \
   -H "Authorization: Bearer <access_token>" \

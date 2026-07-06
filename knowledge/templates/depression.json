@@ -1,0 +1,131 @@
+{
+  "template_name": "抑郁障碍分析模板",
+  "disease_type": "depression",
+  "description": "基于HAMD-17/HAMA/PHQ-9的抑郁障碍标准化分析模板，覆盖数据质控、量表分析、治疗反应、用药关联、复发预测与症状网络",
+  "scales": [
+    {
+      "name": "HAMD-17",
+      "full_name": "Hamilton Depression Rating Scale",
+      "items": 17,
+      "range": "0-52",
+      "reference": "Hamilton M (1960) J Neurol Neurosurg Psychiatry 23:56-62",
+      "severity": {
+        "mild": 8,
+        "moderate": 14,
+        "severe": 23
+      }
+    },
+    {
+      "name": "PHQ-9",
+      "full_name": "Patient Health Questionnaire-9",
+      "items": 9,
+      "range": "0-27",
+      "reference": "Kroenke K et al (2001) J Gen Intern Med 16:606-613",
+      "severity": {
+        "minimal": 0,
+        "mild": 5,
+        "moderate": 10,
+        "moderately_severe": 15,
+        "severe": 20
+      }
+    },
+    {
+      "name": "HAMA",
+      "full_name": "Hamilton Anxiety Rating Scale",
+      "items": 14,
+      "range": "0-56",
+      "reference": "Hamilton M (1959) Br J Med Psychol 32:50-55",
+      "severity": {
+        "mild": 17,
+        "moderate": 25,
+        "severe": 30
+      }
+    }
+  ],
+  "analysis_steps": [
+    {
+      "step": 1,
+      "name": "数据质控",
+      "operator": "missing_summary",
+      "description": "缺失率/数据类型/唯一值统计"
+    },
+    {
+      "step": 2,
+      "name": "异常值检测",
+      "operator": "outlier_iqr_flag",
+      "description": "Tukey IQR围栏标记"
+    },
+    {
+      "step": 3,
+      "name": "缺失值填补",
+      "operator": "data_imputation",
+      "description": "median填补策略"
+    },
+    {
+      "step": 4,
+      "name": "描述统计",
+      "operator": "describe_full",
+      "description": "12项统计量: count/mean/std/IQR/skewness/kurtosis等"
+    },
+    {
+      "step": 5,
+      "name": "分布直方图",
+      "operator": "distribution_histogram",
+      "description": "等宽直方图数据"
+    },
+    {
+      "step": 6,
+      "name": "HAMD因子分计算",
+      "operator": "factor_score",
+      "description": "6因子: anxiety_somatization/weight/cognitive_disturbance/diurnal_variation/retardation/sleep_disturbance"
+    },
+    {
+      "step": 7,
+      "name": "治疗反应评估",
+      "operator": "responder_analysis",
+      "description": "基线vs终点变化, >=50%下降为responder"
+    },
+    {
+      "step": 8,
+      "name": "用药-结局关联",
+      "operator": "ordinal_regression",
+      "description": "累积logit有序回归(基于McCullagh 1980)"
+    },
+    {
+      "step": 9,
+      "name": "复发/再入院分析",
+      "operator": "survival_kaplan_meier",
+      "description": "KM曲线+log-rank检验+中位生存时间"
+    },
+    {
+      "step": 10,
+      "name": "Cox回归",
+      "operator": "cox_regression",
+      "description": "Cox比例风险模型(基于lifelines)"
+    },
+    {
+      "step": 11,
+      "name": "症状网络分析",
+      "operator": "symptom_network_analysis",
+      "description": "Graphical Lasso偏相关网络(Borsboom et al 2013); 中心性指标"
+    },
+    {
+      "step": 12,
+      "name": "抑郁-焦虑共病",
+      "operator": "correlation",
+      "description": "Pearson/Spearman多量表相关矩阵"
+    }
+  ],
+  "report_structure": [
+    "研究对象基本信息",
+    "数据质控结果",
+    "HAMD量表分析",
+    "治疗反应分析",
+    "用药与结局关联",
+    "复发与生存分析",
+    "症状网络",
+    "结论与建议"
+  ],
+  "version": "2.0.0",
+  "last_updated": "2025-06-30"
+}

@@ -11,6 +11,8 @@ from configs.config import TEMP_FOLDER
 
 WORKSPACES_ROOT = os.path.join(TEMP_FOLDER, "workspaces")
 
+PROJECT_SUBDIRS = ("raw", "processed", "outputs", "archive", "sessions")
+
 # 禁止相对路径逃逸
 FORBIDDEN_PREFIXES = ("../", "..\\")
 
@@ -18,6 +20,64 @@ FORBIDDEN_PREFIXES = ("../", "..\\")
 def _ensure_workspaces_root() -> str:
     os.makedirs(WORKSPACES_ROOT, exist_ok=True)
     return WORKSPACES_ROOT
+
+
+def project_root_for(user_id: int, project_id: int) -> str:
+    """计算用户级隔离下的项目工作区绝对路径（不创建目录）。"""
+    return os.path.abspath(
+        os.path.join(WORKSPACES_ROOT, str(int(user_id)), str(int(project_id)))
+    )
+
+
+def init_project_workspace(user_id: int, project_id: int) -> str:
+    """为项目创建唯一工作区目录及子目录 raw/processed/outputs/archive/sessions。"""
+    if user_id <= 0:
+        raise ValueError("user_id 必须为正整数")
+    if project_id <= 0:
+        raise ValueError("project_id 必须为正整数")
+    _ensure_workspaces_root()
+    abs_path = project_root_for(user_id, project_id)
+    os.makedirs(abs_path, exist_ok=True)
+    for sub in PROJECT_SUBDIRS:
+        os.makedirs(os.path.join(abs_path, sub), exist_ok=True)
+    return abs_path
+
+
+def init_session_in_project(user_id: int, project_id: int, session_id: Optional[str] = None) -> str:
+    """在项目 sessions/ 下创建会话工作区目录。"""
+    if user_id <= 0:
+        raise ValueError("user_id 必须为正整数")
+    if project_id <= 0:
+        raise ValueError("project_id 必须为正整数")
+    _ensure_workspaces_root()
+    sid = (session_id or "").strip() or str(uuid.uuid4())
+    project_root = project_root_for(user_id, project_id)
+    for sub in PROJECT_SUBDIRS:
+        os.makedirs(os.path.join(project_root, sub), exist_ok=True)
+    session_path = os.path.join(project_root, "sessions", sid)
+    os.makedirs(session_path, exist_ok=True)
+    return os.path.abspath(session_path)
+
+
+def resolve_project_root(project_id: int) -> Optional[str]:
+    """根据 project_id 得到项目工作区绝对路径（不创建目录）。"""
+    if project_id <= 0:
+        return None
+    from db.project_store import ProjectStore
+
+    row, err = ProjectStore.get_project(project_id)
+    if not err and row:
+        db_path = str(row.get("workspace_abs_path") or "").strip()
+        if db_path:
+            abs_db = os.path.abspath(db_path)
+            if os.path.isdir(abs_db):
+                return abs_db
+        user_id = int(row.get("user_id") or 0)
+        if user_id > 0:
+            path = project_root_for(user_id, project_id)
+            if os.path.isdir(path):
+                return path
+    return None
 
 
 def workspace_path_for(user_id: int, session_id: str) -> str:
@@ -54,12 +114,19 @@ def resolve_workspace_root(session_id: str) -> Optional[str]:
     return None
 
 
-def init_workspace(user_id: int, session_id: Optional[str] = None) -> str:
+def init_workspace(
+    user_id: int,
+    session_id: Optional[str] = None,
+    project_id: Optional[int] = None,
+) -> str:
     """
-    为会话创建唯一工作区目录（仅根目录，不创建 input/output/code 子目录）。
-    路径布局：workspaces/<user_id>/<session_id>/。
-    返回: 工作区绝对路径
+    为会话创建唯一工作区目录。
+    - 有 project_id：workspaces/<user_id>/<project_id>/sessions/<session_id>/
+    - 无 project_id（旧逻辑）：workspaces/<user_id>/<session_id>/
     """
+    if project_id and int(project_id) > 0:
+        sid = (session_id or "").strip() or str(uuid.uuid4())
+        return init_session_in_project(user_id, int(project_id), sid)
     if user_id <= 0:
         raise ValueError("user_id 必须为正整数")
     _ensure_workspaces_root()
@@ -155,7 +222,9 @@ def to_absolute_path(session_id: str, relative_path: str) -> Optional[str]:
 def get_workspace_session_id_from_abs_path(absolute_path: str) -> Optional[str]:
     """
     从绝对路径反推 session_id（若路径在 WORKSPACES_ROOT 下）。
-    布局 workspaces/<user_id>/<session_id>/...
+    支持 layouts:
+    - workspaces/<user_id>/<session_id>/...
+    - workspaces/<user_id>/<project_id>/sessions/<session_id>/...
     """
     root = os.path.abspath(WORKSPACES_ROOT)
     path = os.path.abspath(absolute_path)
@@ -163,6 +232,8 @@ def get_workspace_session_id_from_abs_path(absolute_path: str) -> Optional[str]:
         return None
     rel = os.path.relpath(path, root)
     parts = rel.split(os.sep)
+    if len(parts) >= 4 and parts[2] == "sessions":
+        return parts[3]
     if len(parts) >= 2:
         return parts[1]
     return None

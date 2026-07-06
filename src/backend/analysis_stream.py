@@ -1,7 +1,7 @@
 import json
 import asyncio
 from datetime import datetime
-from typing import AsyncGenerator, Dict, Any, Tuple
+from typing import AsyncGenerator, Dict, Any, Tuple, Optional, List
 
 from db.session_store import SessionStore
 from configs.config import LANGUAGE
@@ -12,8 +12,8 @@ def _format_sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _parse_json_events(content: str) -> list[Dict[str, Any]]:
-    events: list[Dict[str, Any]] = []
+def _parse_json_events(content: str) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
     for raw in (content or "").splitlines():
         line = raw.strip()
         if not line:
@@ -31,7 +31,7 @@ def _is_terminal_event(event: Dict[str, Any]) -> bool:
     return str(event.get("type") or "") in {"streaming_ended", "streaming_error", "error"}
 
 
-def _extract_increment_event(prev_content: str, curr_content: str) -> Dict[str, Any] | None:
+def _extract_increment_event(prev_content: str, curr_content: str) -> Optional[Dict[str, Any]]:
     """
     从累计内容中提取“本次版本新增/更新”的最后一条事件。
     当 llm_chunk 被合并时，行数可能不变，因此不能仅依赖追加行数。
@@ -49,7 +49,7 @@ def _extract_increment_event(prev_content: str, curr_content: str) -> Dict[str, 
     return None
 
 
-def _latest_event_from_content(content: str) -> Dict[str, Any] | None:
+def _latest_event_from_content(content: str) -> Optional[Dict[str, Any]]:
     events = _parse_json_events(content)
     if not events:
         return None
@@ -101,6 +101,13 @@ async def streaming_task_generator(
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             },
         )
+    finally:
+        try:
+            from backend.project_asset_registry import register_analysis_outputs
+
+            register_analysis_outputs(session_id)
+        except Exception:
+            pass
 
 
 async def reconnect_streaming_task_generator(

@@ -32,7 +32,7 @@ class SessionStore:
     def get_session_user(session_id: str) -> Tuple[Optional[SessionUserRow], Optional[str]]:
         """根据 session_id 获取会话-用户映射记录。"""
         sql = (
-            f"SELECT id, session_id, user_id, title, workspace_abs_path FROM {TABLE_SESSION_USER} "
+            f"SELECT id, session_id, user_id, project_id, title, workspace_abs_path FROM {TABLE_SESSION_USER} "
             "WHERE session_id = %s LIMIT 1"
         )
         rows, err = mysql_handler.query(sql, (session_id,))
@@ -43,7 +43,12 @@ class SessionStore:
         return rows[0], None
 
     @staticmethod
-    def create_session(session_id: str, user_id: int, workspace_abs_path: str) -> Tuple[bool, Optional[str]]:
+    def create_session(
+        session_id: str,
+        user_id: int,
+        workspace_abs_path: str,
+        project_id: Optional[int] = None,
+    ) -> Tuple[bool, Optional[str]]:
         """创建会话映射；若 session_id 已存在则返回失败。"""
         exists, err = SessionStore.get_session_user(session_id)
         if err:
@@ -55,6 +60,8 @@ class SessionStore:
             "user_id": user_id,
             "workspace_abs_path": workspace_abs_path,
         }
+        if project_id is not None and int(project_id) > 0:
+            data["project_id"] = int(project_id)
         _, _, err = mysql_handler.insert(TABLE_SESSION_USER, data)
         return (err is None, err)
 
@@ -99,6 +106,58 @@ class SessionStore:
             if row.get("session_id")
         ]
         return sessions, None
+
+    @staticmethod
+    def get_accessible_sessions(user_id: int) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """
+        返回当前用户可访问的会话列表（自己创建的 + 可访问项目内的共享会话）。
+        字段：session_id, title, project_id（可选）, access（owner | shared）
+        """
+        from db.rbac_store import RbacStore
+        from db.project_store import ProjectStore
+
+        own_sessions, err = SessionStore.get_sessions_by_user_id(user_id)
+        if err:
+            return [], err
+
+        seen: set[str] = set()
+        result: List[Dict[str, Any]] = []
+
+        for s in own_sessions:
+            sid = str(s.get("session_id") or "")
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            result.append({
+                "session_id": sid,
+                "title": s.get("title"),
+                "access": "owner",
+            })
+
+        projects, err = RbacStore.list_projects_for_user(user_id)
+        if err:
+            return [], err
+
+        for proj in projects or []:
+            pid = int(proj.get("id") or 0)
+            if pid <= 0:
+                continue
+            proj_sessions, err = ProjectStore.list_sessions_by_project(pid)
+            if err:
+                return [], err
+            for s in proj_sessions or []:
+                sid = str(s.get("session_id") or "")
+                if not sid or sid in seen:
+                    continue
+                seen.add(sid)
+                result.append({
+                    "session_id": sid,
+                    "title": s.get("title"),
+                    "project_id": pid,
+                    "access": "shared",
+                })
+
+        return result, None
 
     @staticmethod
     def save_session_title_if_absent(session_id: str, title: str) -> Tuple[bool, bool, Optional[str]]:

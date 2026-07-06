@@ -73,28 +73,55 @@ export CUBE_TEMPLATE_ID=<你的模板ID>
 
 详见 [`Cubesandbox-agent-integration.md`](Cubesandbox-agent-integration.md)。
 
-## 启动后端指令
+## 启动
+
+在**仓库根目录**执行：
 
 ```bash
-cd src
-# 避免 HTTP/SOCKS 代理导致 E2B 502 或短信网关 Missing SOCKS support
-unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy SOCKS_PROXY socks_proxy SOCKS5_PROXY socks5_proxy
-# Runner 执行环境（与主服务分离）
-export RUNNER_PYTHON="$(conda run -n agentPlatform-runner which python)"
-# 生产环境务必设置 JWT 签名密钥；本地开发可省略（将使用临时 dev 密钥）
-# export JWT_SECRET_KEY="your-production-secret"
-python -m uvicorn backend.server:app --host 0.0.0.0 --port 52716
+# 首次初始化（模板 + fixtures）
+bash scripts/init-platform.sh
+
+# 日常启动
+bash scripts/start.sh                     # 仅后端 52716
+bash scripts/start.sh --with-frontend     # 后端 + 联调前端 8501
+
+# 查看 / 停止
+bash scripts/status.sh
+bash scripts/stop.sh              # 仅停后端
+bash scripts/stop.sh --all        # 后端 + 联调前端
 ```
 
-## 启动前端指令
+| 脚本 | 说明 |
+|------|------|
+| [`scripts/init-platform.sh`](../scripts/init-platform.sh) | 首次初始化：fixtures + 模板种子（`--acceptance` 含验收账号） |
+| [`scripts/start.sh`](../scripts/start.sh) | 停旧进程并后台启动（`--with-frontend` / `--foreground`） |
+| [`scripts/stop.sh`](../scripts/stop.sh) | 停止服务（`--all` 含前端） |
+| [`scripts/status.sh`](../scripts/status.sh) | 进程与健康检查 |
 
+日志目录：`tmp/logs/`（`backend.log`、`frontend.log`）。
+
+健康检查：
+
+```bash
+curl http://localhost:52716/health
 ```
-cd src
-streamlit run frontend/frontend.py
-```
+
+### 联调前端说明
+
+| 项 | 说明 |
+|----|------|
+| 访问地址 | `http://<主机>:8501`（8501 仅作联调示例，正式运行可不开） |
+| 验收登录 | 可选：`bash scripts/init-platform.sh --acceptance` + `ACCEPTANCE_MODE=1 bash scripts/start.sh --with-frontend`，侧栏 `13800000000` / `888888` |
+| 分析入口 | 「模板分析」页选模板跑分析；「流式分析」页跑 LLM SSE |
+| 正式前端 | 按 [`TemplateAPI.md`](TemplateAPI.md) 对接 HTTP；Streamlit 不是产品前端 |
+
+**演示数据**：运行 `bash scripts/init-platform.sh` 后位于 `tests/fixtures/`（横截面 baseline 样本 + 纵向随访样本）
+
+模板 API 详见 [`TemplateAPI.md`](TemplateAPI.md)。
 
 ## 相关文档
 
+- 模板分析 API：[`TemplateAPI.md`](TemplateAPI.md)
 - Cube Sandbox 部署：[`Cubesandbox-deploy.md`](Cubesandbox-deploy.md)
 - 与 AgentPlatform 集成：[`Cubesandbox-agent-integration.md`](Cubesandbox-agent-integration.md)
 - 后端 API：[`BackendAPI.md`](BackendAPI.md)

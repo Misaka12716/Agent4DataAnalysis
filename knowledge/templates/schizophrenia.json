@@ -1,0 +1,130 @@
+{
+  "template_name": "精神分裂症分析模板",
+  "disease_type": "schizophrenia",
+  "description": "基于PANSS/BPRS/SANS的精神分裂症标准化分析模板，覆盖PANSS因子分、治疗反应、轨迹分析、药物比较与症状网络",
+  "scales": [
+    {
+      "name": "PANSS",
+      "full_name": "Positive and Negative Syndrome Scale",
+      "items": 30,
+      "range": "30-210",
+      "reference": "Kay SR et al (1987) Schizophr Bull 13:261-276",
+      "factors": [
+        {
+          "name": "positive",
+          "items": "P1-P7",
+          "count": 7
+        },
+        {
+          "name": "negative",
+          "items": "N1-N7",
+          "count": 7
+        },
+        {
+          "name": "general",
+          "items": "G1-G16",
+          "count": 16
+        }
+      ],
+      "severity": {
+        "mildly_ill": 58,
+        "moderately_ill": 75,
+        "markedly_ill": 95
+      }
+    },
+    {
+      "name": "BPRS",
+      "full_name": "Brief Psychiatric Rating Scale",
+      "items": 18,
+      "range": "18-126",
+      "reference": "Overall JE, Gorham DR (1962) Psychol Rep 10:799-812"
+    },
+    {
+      "name": "SANS",
+      "full_name": "Scale for the Assessment of Negative Symptoms",
+      "items": 25,
+      "range": "0-125",
+      "reference": "Andreasen NC (1984) University of Iowa"
+    }
+  ],
+  "analysis_steps": [
+    {
+      "step": 1,
+      "name": "数据质控",
+      "operator": "missing_summary",
+      "description": "缺失率/数据类型/唯一值统计"
+    },
+    {
+      "step": 2,
+      "name": "异常值检测",
+      "operator": "outlier_iqr_flag",
+      "description": "Tukey IQR围栏标记"
+    },
+    {
+      "step": 3,
+      "name": "缺失值填补",
+      "operator": "data_imputation",
+      "description": "median填补策略"
+    },
+    {
+      "step": 4,
+      "name": "PANSS因子分计算",
+      "operator": "panss_factor_score",
+      "description": "Positive(7)+Negative(7)+General(16)=Total 30 items"
+    },
+    {
+      "step": 5,
+      "name": "描述统计",
+      "operator": "describe_full",
+      "description": "12项统计量"
+    },
+    {
+      "step": 6,
+      "name": "PANSS治疗反应",
+      "operator": "panss_trajectory_responder",
+      "description": ">=30%下降为responder, 基线vs随访终点"
+    },
+    {
+      "step": 7,
+      "name": "PANSS轨迹分析",
+      "operator": "latent_growth_curve",
+      "description": "潜变量增长曲线模型(基于MixedLM), 识别治疗轨迹亚型"
+    },
+    {
+      "step": 8,
+      "name": "网络Meta分析",
+      "operator": "network_meta_analysis",
+      "description": "基于Lu & Ades (2004)的随机效应NMA, 比较不同抗精神病药"
+    },
+    {
+      "step": 9,
+      "name": "症状网络分析",
+      "operator": "symptom_network_analysis",
+      "description": "PANSS条目水平的部分相关网络"
+    },
+    {
+      "step": 10,
+      "name": "复发/再入院",
+      "operator": "survival_kaplan_meier",
+      "description": "KM曲线+log-rank检验"
+    },
+    {
+      "step": 11,
+      "name": "Cox回归",
+      "operator": "cox_regression",
+      "description": "Cox比例风险模型"
+    }
+  ],
+  "report_structure": [
+    "研究对象基本信息",
+    "数据质控结果",
+    "PANSS因子分析",
+    "治疗反应与轨迹分析",
+    "用药比较分析",
+    "症状网络",
+    "复发与生存分析",
+    "结论与建议"
+  ],
+  "version": "2.0.0",
+  "last_updated": "2025-06-30"
+}

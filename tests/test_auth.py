@@ -49,22 +49,28 @@ def test_decode_expired_token_raises():
 
 def test_assert_session_owner_success():
     session_row = {"session_id": "sid-1", "user_id": 10, "workspace_abs_path": "/tmp/ws"}
-    with patch("backend.session_auth.SessionStore.get_session_user", return_value=(session_row, None)):
+    with patch("db.session_store.SessionStore.get_session_user", return_value=(session_row, None)):
         result = assert_session_owner("sid-1", 10)
     assert result["session_id"] == "sid-1"
 
 
 def test_assert_session_owner_forbidden():
-    session_row = {"session_id": "sid-1", "user_id": 10, "workspace_abs_path": "/tmp/ws"}
-    with patch("backend.session_auth.SessionStore.get_session_user", return_value=(session_row, None)):
-        with pytest.raises(HTTPException) as exc:
-            assert_session_owner("sid-1", 99)
+    session_row = {"session_id": "sid-1", "user_id": 10, "project_id": 1, "workspace_abs_path": "/tmp/ws"}
+    with patch("db.session_store.SessionStore.get_session_user", return_value=(session_row, None)):
+        with patch(
+            "backend.project_auth.assert_project_access",
+            side_effect=HTTPException(
+                status_code=403,
+                detail={"code": 7, "msg": "forbidden: session access denied"},
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                assert_session_owner("sid-1", 99)
     assert exc.value.status_code == 403
-    assert exc.value.detail == {"code": 7, "msg": "forbidden: session access denied"}
 
 
 def test_assert_session_owner_not_found():
-    with patch("backend.session_auth.SessionStore.get_session_user", return_value=(None, None)):
+    with patch("db.session_store.SessionStore.get_session_user", return_value=(None, None)):
         with pytest.raises(HTTPException) as exc:
             assert_session_owner("missing", 1)
     assert exc.value.status_code == 404

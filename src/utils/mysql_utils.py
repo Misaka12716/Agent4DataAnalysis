@@ -1,6 +1,8 @@
 # mysql_utils.py
 # MySQL数据库操作封装，提供连接管理和基本CRUD功能
 
+import threading
+
 import pymysql  # pyright: ignore[reportMissingModuleSource]
 from pymysql.cursors import DictCursor  # pyright: ignore[reportMissingModuleSource]
 from typing import List, Dict, Optional, Tuple
@@ -42,11 +44,27 @@ class MySQLHandler:
 
         self.connection: Optional[pymysql.connections.Connection] = None
         self.cursor: Optional[pymysql.cursors.Cursor] = None
+        self._lock = threading.Lock()
         self._connect()  # 初始化时建立连接
+
+    def _reset_connection(self) -> None:
+        if self.cursor:
+            try:
+                self.cursor.close()
+            except Exception:
+                pass
+        if self.connection:
+            try:
+                self.connection.close()
+            except Exception:
+                pass
+        self.cursor = None
+        self.connection = None
 
     def _connect(self) -> None:
         """建立数据库连接"""
         try:
+            self._reset_connection()
             self.connection = pymysql.connect(
                 host=self.host,
                 user=self.user,
@@ -64,11 +82,20 @@ class MySQLHandler:
 
     def close(self) -> None:
         """关闭数据库连接"""
-        if self.cursor:
-            self.cursor.close()
-        if self.connection:
-            self.connection.close()
+        with self._lock:
+            self._reset_connection()
             print("数据库连接已关闭")
+
+    def _ensure_connection(self) -> None:
+        if not self.connection or self.connection._closed:
+            self._connect()
+
+    def _query_once(
+        self, sql: str, params: Optional[Tuple] = None
+    ) -> Tuple[List[Dict], Optional[str]]:
+        self._ensure_connection()
+        self.cursor.execute(sql, params or ())
+        return self.cursor.fetchall(), None
 
     def query(
         self, sql: str, params: Optional[Tuple] = None
@@ -79,19 +106,26 @@ class MySQLHandler:
         :param params: SQL参数（元组类型，用于替换占位符，防止SQL注入）
         :return: (查询结果列表, 错误信息) 若成功，错误信息为None
         """
-        result = []
-        error = None
-        try:
-            # 若连接已关闭，重新建立连接
-            if not self.connection or self.connection._closed:
-                self._connect()
+        with self._lock:
+            try:
+                return self._query_once(sql, params)
+            except pymysql.MySQLError:
+                try:
+                    self._connect()
+                    return self._query_once(sql, params)
+                except pymysql.MySQLError as retry_err:
+                    error = f"查询失败: {retry_err}"
+                    print(error)
+                    return [], error
 
-            self.cursor.execute(sql, params or ())
-            result = self.cursor.fetchall()  # 获取所有结果
-        except pymysql.MySQLError as e:
-            error = f"查询失败: {e}"
-            print(error)
-        return result, error
+    def _execute_once(
+        self, sql: str, params: Optional[Tuple] = None, auto_commit: bool = True
+    ) -> Tuple[int, Optional[str]]:
+        self._ensure_connection()
+        affected_rows = self.cursor.execute(sql, params or ())
+        if auto_commit:
+            self.connection.commit()
+        return affected_rows, None
 
     def execute(
         self, sql: str, params: Optional[Tuple] = None, auto_commit: bool = True
@@ -103,21 +137,27 @@ class MySQLHandler:
         :param auto_commit: 是否自动提交事务（默认True）
         :return: (受影响的行数, 错误信息) 若成功，错误信息为None
         """
-        affected_rows = 0
-        error = None
-        try:
-            if not self.connection or self.connection._closed:
-                self._connect()
-
-            affected_rows = self.cursor.execute(sql, params or ())
-            if auto_commit:
-                self.connection.commit()  # 自动提交
-        except pymysql.MySQLError as e:
-            if self.connection:
-                self.connection.rollback()  # 出错时回滚
-            error = f"执行失败: {e}"
-            print(error)
-        return affected_rows, error
+        with self._lock:
+            try:
+                return self._execute_once(sql, params, auto_commit)
+            except pymysql.MySQLError:
+                if self.connection:
+                    try:
+                        self.connection.rollback()
+                    except Exception:
+                        pass
+                try:
+                    self._connect()
+                    return self._execute_once(sql, params, auto_commit)
+                except pymysql.MySQLError as retry_err:
+                    if self.connection:
+                        try:
+                            self.connection.rollback()
+                        except Exception:
+                            pass
+                    error = f"执行失败: {retry_err}"
+                    print(error)
+                    return 0, error
 
     def insert(
         self, table: str, data: Dict[str, any], auto_commit: bool = True
@@ -134,26 +174,55 @@ class MySQLHandler:
         sql = f"INSERT INTO {table} ({fields}) VALUES ({placeholders})"
         params = tuple(data.values())
 
-        affected_rows, error = self.execute(sql, params, auto_commit)
-        last_insert_id = self.cursor.lastrowid if not error else None
-        return affected_rows, last_insert_id, error
+        with self._lock:
+            try:
+                affected_rows, _ = self._execute_once(sql, params, auto_commit)
+            except pymysql.MySQLError:
+                try:
+                    self._connect()
+                    affected_rows, _ = self._execute_once(sql, params, auto_commit)
+                except pymysql.MySQLError as retry_err:
+                    error = f"执行失败: {retry_err}"
+                    print(error)
+                    return 0, None, error
+            last_insert_id = self.cursor.lastrowid
+            return affected_rows, last_insert_id, None
+
+    def _check_table_exists_unlocked(self, table_name: str) -> bool:
+        sql = """
+            SELECT COUNT(*) AS exist
+            FROM information_schema.tables
+            WHERE table_schema = %s AND table_name = %s
+        """
+        self._ensure_connection()
+        self.cursor.execute(sql, (self.db, table_name))
+        result = self.cursor.fetchone()
+        return result["exist"] > 0 if result else False
 
     def _check_table_exists(self, table_name: str) -> bool:
         """检查指定表是否存在"""
-        try:
-            # 查询information_schema判断表是否存在
-            sql = """
-                SELECT COUNT(*) AS exist 
-                FROM information_schema.tables 
-                WHERE table_schema = %s AND table_name = %s
-            """
-            self.cursor.execute(sql, (self.db, table_name))
-            result = self.cursor.fetchone()
-            return result["exist"] > 0 if result else False
-        except pymysql.MySQLError as e:
-            print(f"检查表 {table_name} 存在性失败: {e}")
-            return False
+        with self._lock:
+            try:
+                return self._check_table_exists_unlocked(table_name)
+            except pymysql.MySQLError:
+                try:
+                    self._connect()
+                    return self._check_table_exists_unlocked(table_name)
+                except pymysql.MySQLError as retry_err:
+                    print(f"检查表 {table_name} 存在性失败: {retry_err}")
+                    return False
 
-mysql_handler = MySQLHandler(
-    MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB, MYSQL_PORT, MYSQL_CHARSET
-)
+try:
+    mysql_handler = MySQLHandler(
+        MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB, MYSQL_PORT, MYSQL_CHARSET
+    )
+    print('MySQL connected')
+except Exception as _e:
+    print(f'MySQL failed ({_e}), using SQLite')
+    try:
+        from utils.sqlite_adapter import sqlite_handler as _fb
+        mysql_handler = _fb
+        print('SQLite fallback enabled')
+    except Exception as _e2:
+        print(f'SQLite also failed: {_e2}')
+        raise RuntimeError('No database') from _e
