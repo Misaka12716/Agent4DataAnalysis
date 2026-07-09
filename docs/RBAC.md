@@ -50,8 +50,10 @@
 - **项目生命周期**（重命名/归档/恢复）：admin OR 项目所有者 OR `project_manager`
 - **会话访问**：会话创建者 OR 会话所属项目的成员/admin
 - **会话列表**（`GET /session/list`）：自己创建的会话 + 可访问项目内的全部会话（含他人创建）；响应含 `access`（`owner` | `shared`）与可选 `project_id`
-- **项目列表**（`GET /project/list`）：普通用户为 owned + member 项目；平台 admin 返回全部项目
-- **成员管理**：admin OR 项目所有者 OR project_manager
+- **项目列表**（`GET /project/list`）：普通用户为 owned + member 项目；平台 admin 返回全部项目；每项含 `access`、`permissions`、`is_shared`
+- **项目详情**（`GET /project/{id}`）：响应含当前用户的 `access`、`permissions`、`is_shared`
+- **成员列表**（`GET /project/{id}/members`）：任意项目成员可读；添加/更新/移除需成员管理权限
+- **成员管理**（写操作）：admin OR 项目所有者 OR project_manager OR 带 `member_manage` 的 member
 - **个人默认项目**：不支持成员管理（避免误共享私人数据）
 - **归档项目**：仍禁止写操作（code=8）
 
@@ -67,6 +69,8 @@
 **当前边界**：隔离止于项目级；CSV/Excel 中的 `patient_id` 列尚未建立独立患者实体或行级 ACL。患者级子集授权为后续规划项。
 
 前端 Streamlit 页面通过 `/auth/me` 缓存的 `permissions_summary` 按权限隐藏/禁用上传、分析、归档等操作；**后端 API 校验仍是安全边界**。
+
+**产品前端对接**：详见 [`FrontendIntegrationGuide.md`](FrontendIntegrationGuide.md)（项目/会话模型、页面流程、权限缓存、API 速查）。
 
 ## 5. HTTP 错误码
 
@@ -93,8 +97,9 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/project/{id}/members` | 成员列表 |
-| POST | `/project/{id}/members` | 添加成员 |
+| GET | `/users/lookup?phone=` | 按手机号精确查找用户（需登录，用于邀请协作者） |
+| GET | `/project/{id}/members` | 成员列表（项目成员可读） |
+| POST | `/project/{id}/members` | 添加成员（`user_id` 或 `phone` 二选一） |
 | PUT | `/project/{id}/members/{user_id}` | 更新成员 |
 | DELETE | `/project/{id}/members/{user_id}` | 移除成员 |
 
@@ -131,7 +136,7 @@ Streamlit 多页应用（需先登录）：
 - `frontend/pages/admin_users.py` — 用户管理（admin）
 - `frontend/pages/project_members.py` — 项目成员与权限（需 `member_manage` 方可编辑）
 - `frontend/pages/project_workspace.py` — 项目工作区（按权限控制上传/归档/重命名）
-- `frontend/frontend.py` — 主控制台（侧栏标注共享会话，按权限控制上传与分析）
+- `frontend/app.py` — 主控制台（侧栏标注共享会话，按权限控制上传与分析）
 
 前端权限辅助函数见 `src/frontend/page_utils.py`（`project_has_permission`、`can_upload`、`can_analyze`、`can_manage_project` 等）。
 

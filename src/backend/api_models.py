@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 
 
 class WorkflowRequest(BaseModel):
@@ -26,6 +26,15 @@ class ReconnectStreamRequest(BaseModel):
 class SaveSessionTitleRequest(BaseModel):
     session_id: str
     title: str
+
+
+class CreateSessionRequest(BaseModel):
+    project_id: Optional[int] = None
+
+
+class CopyProjectRawRequest(BaseModel):
+    session_id: str
+    relative_paths: Optional[List[str]] = None
 
 
 class SendSmsCodeRequest(BaseModel):

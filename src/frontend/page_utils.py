@@ -284,13 +284,15 @@ def api_put(path: str, data: dict, timeout: float = 60) -> dict:
         return {"error": str(e)}
 
 
-def api_delete(path: str, timeout: float = 60) -> dict:
+def api_delete(path: str, timeout: float = 60, json_body: dict | None = None) -> dict:
     try:
-        resp = httpx.delete(
-            f"{api_base_url()}{path}",
-            headers=auth_headers(),
-            timeout=timeout,
-        )
+        kwargs: dict = {
+            "headers": auth_headers(),
+            "timeout": timeout,
+        }
+        if json_body is not None:
+            kwargs["json"] = json_body
+        resp = httpx.request("DELETE", f"{api_base_url()}{path}", **kwargs)
         if resp.status_code == 200:
             return resp.json()
         return {"error": _parse_error(resp)}
@@ -298,7 +300,11 @@ def api_delete(path: str, timeout: float = 60) -> dict:
         return {"error": str(e)}
 
 
-def resolve_project_id_for_permission(projects: list | None) -> int:
+def resolve_project_id_for_permission(projects: list | None = None) -> int:
+    """权限校验以会话归属项目为准；无会话上下文时回退到侧栏当前项目。"""
+    session_pid = int(st.session_state.get("session_project_id", 0) or 0)
+    if session_pid > 0:
+        return session_pid
     pid = int(st.session_state.get("current_project_id", 0) or 0)
     if pid > 0:
         return pid
@@ -306,6 +312,38 @@ def resolve_project_id_for_permission(projects: list | None) -> int:
         if (item or {}).get("is_default"):
             return int((item or {}).get("id") or 0)
     return 0
+
+
+def sync_session_project_context(session_id: str) -> None:
+    """根据 session_id 拉取 meta 并同步 session_project_id / current_project_id。"""
+    sid = (session_id or "").strip()
+    if not sid or not is_logged_in():
+        st.session_state["session_project_id"] = 0
+        return
+    result = api_get("/session/meta", params={"session_id": sid}, timeout=10.0)
+    if "error" in result:
+        st.session_state["session_project_id"] = 0
+        return
+    meta = result.get("data") or {}
+    pid = int(meta.get("project_id") or 0)
+    st.session_state["session_project_id"] = pid
+    if pid > 0:
+        st.session_state["current_project_id"] = pid
+
+
+def apply_session_selection(session_id: str, project_id: int | None = None) -> None:
+    """切换当前会话并同步项目上下文。"""
+    sid = (session_id or "").strip()
+    st.session_state["session_id"] = sid
+    st.session_state["_reset_session_id"] = sid
+    if project_id is not None and int(project_id or 0) > 0:
+        pid = int(project_id)
+        st.session_state["session_project_id"] = pid
+        st.session_state["current_project_id"] = pid
+    elif sid:
+        sync_session_project_context(sid)
+    else:
+        st.session_state["session_project_id"] = 0
 
 
 def project_has_permission(project_id: int, permission: str) -> bool:
@@ -340,9 +378,7 @@ def can_manage_project(project_id: int) -> bool:
     if project_id <= 0:
         return True
     proj = (summary.get("projects") or {}).get(str(project_id)) or {}
-    if proj.get("access") == "owner":
-        return True
-    if proj.get("access") == "admin":
+    if proj.get("access") in ("owner", "project_manager", "admin"):
         return True
     return PERM_MEMBER_MANAGE in (proj.get("permissions") or [])
 
@@ -354,9 +390,31 @@ def can_manage_members(project_id: int) -> bool:
     if summary.get("is_admin"):
         return True
     proj = (summary.get("projects") or {}).get(str(project_id)) or {}
-    if proj.get("access") == "owner":
+    if proj.get("access") in ("owner", "project_manager"):
         return True
     return PERM_MEMBER_MANAGE in (proj.get("permissions") or [])
+
+
+def can_download(project_id: int) -> bool:
+    return project_has_permission(project_id, PERM_DATA_DOWNLOAD)
+
+
+def can_delete(project_id: int) -> bool:
+    return project_has_permission(project_id, PERM_DATA_DELETE)
+
+
+def get_project_access_info(project_id: int) -> dict:
+    summary = st.session_state.get("permissions_summary") or {}
+    if is_platform_admin() or summary.get("is_admin"):
+        return {"access": "admin", "permissions": list(ALL_PERMISSION_LABELS.keys())}
+    return (summary.get("projects") or {}).get(str(project_id)) or {}
+
+
+def format_permission_labels(permissions: list | None) -> str:
+    if not permissions:
+        return "（无）"
+    labels = [ALL_PERMISSION_LABELS.get(p, p) for p in permissions]
+    return ", ".join(labels)
 
 
 def require_session() -> str:

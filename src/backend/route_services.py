@@ -2,7 +2,7 @@ import json
 import os
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -242,10 +242,7 @@ def build_create_session_response(user_id: int, project_id: Optional[int] = None
     assert_project_not_archived(project)
 
     session_id = str(uuid.uuid4())
-    if ProjectService.uses_legacy_session_layout(project):
-        workspace_abs = init_workspace(user_id, session_id)
-    else:
-        workspace_abs = init_workspace(user_id, session_id, project_id=effective_project_id)
+    workspace_abs = init_workspace(user_id, session_id, project_id=effective_project_id)
     ok, err = SessionStore.create_session(
         session_id, user_id, workspace_abs, project_id=effective_project_id
     )
@@ -279,9 +276,36 @@ def build_create_session_response(user_id: int, project_id: Optional[int] = None
     )
 
 
-def build_user_sessions_response(user_id: int) -> JSONResponse:
+def build_session_meta_response(session_id: str, current_user_id: int) -> JSONResponse:
+    """返回会话元数据（project_id、工作区路径等），供前端同步权限上下文。"""
+    sid = session_id.strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id 不能为空")
+    session_user = assert_session_access(sid, current_user_id)
+    project_id = session_user.get("project_id")
+    return JSONResponse(
+        content={
+            "status": "success",
+            "msg": "session meta",
+            "data": {
+                "session_id": sid,
+                "user_id": int(session_user.get("user_id") or 0),
+                "project_id": int(project_id) if project_id else None,
+                "title": session_user.get("title"),
+                "workspace_abs_path": str(session_user.get("workspace_abs_path") or ""),
+            },
+        },
+        status_code=200,
+    )
+
+
+def build_user_sessions_response(
+    user_id: int,
+    project_id: Optional[int] = None,
+) -> JSONResponse:
     """
     查询用户可访问会话列表：自己创建的 + 可访问项目内的共享会话。
+    project_id 为正整数时仅返回该项目下的会话。
     """
     if user_id <= 0:
         raise HTTPException(status_code=400, detail="user_id 必须为正整数")
@@ -291,7 +315,7 @@ def build_user_sessions_response(user_id: int) -> JSONResponse:
     if not exists:
         raise HTTPException(status_code=404, detail="user_id 不存在，请先登录或注册")
 
-    sessions, err = SessionStore.get_accessible_sessions(user_id)
+    sessions, err = SessionStore.get_accessible_sessions(user_id, project_id=project_id)
     if err:
         raise HTTPException(status_code=500, detail=f"查询会话列表失败: {err}")
 
@@ -402,6 +426,103 @@ def build_session_workspace_tree_response(session_id: str, current_user_id: int)
                 "workspace_abs_path": workspace_abs,
                 "tree": tree,
                 "files": files,
+            },
+        },
+        status_code=200,
+    )
+
+
+def build_copy_project_raw_to_session_response(
+    session_id: str,
+    relative_paths: Optional[List[str]],
+    current_user_id: int,
+) -> JSONResponse:
+    """
+    将项目 raw/ 下的文件复制到会话工作区，供分析链路使用。
+    relative_paths 为空时复制 raw/ 下全部文件。
+    """
+    import shutil
+
+    sid = session_id.strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id 不能为空")
+
+    session_user = assert_session_access(sid, current_user_id, PERM_DATA_UPLOAD)
+    assert_session_project_not_archived(session_user)
+
+    project_id = session_user.get("project_id")
+    if not project_id:
+        raise HTTPException(status_code=400, detail="会话未关联项目，无法从项目 raw/ 复制")
+
+    project_id = int(project_id)
+    project = assert_project_access(project_id, current_user_id, PERM_DATA_UPLOAD)
+    assert_project_not_archived(project)
+
+    project_root = resolve_project_root(project_id) or str(project.get("workspace_abs_path") or "")
+    raw_dir = os.path.join(project_root, "raw")
+    if not os.path.isdir(raw_dir):
+        raise HTTPException(status_code=404, detail="项目 raw/ 目录不存在")
+
+    session_root = str(session_user.get("workspace_abs_path") or "").strip()
+    if not session_root or not os.path.isdir(session_root):
+        from utils.workspace_manager import resolve_workspace_root
+
+        session_root = resolve_workspace_root(sid) or ""
+    if not session_root or not os.path.isdir(session_root):
+        raise HTTPException(status_code=404, detail="会话工作区不存在")
+
+    if relative_paths:
+        candidates = []
+        for rel in relative_paths:
+            clean = (rel or "").strip().lstrip("/").replace("\\", "/")
+            if not clean or not clean.startswith("raw/"):
+                raise HTTPException(status_code=400, detail=f"路径须位于 raw/ 下: {rel}")
+            abs_path = os.path.normpath(os.path.join(project_root, clean))
+            if not abs_path.startswith(os.path.abspath(project_root) + os.sep):
+                raise HTTPException(status_code=400, detail=f"非法路径: {rel}")
+            if not os.path.isfile(abs_path):
+                raise HTTPException(status_code=404, detail=f"文件不存在: {rel}")
+            candidates.append((clean, abs_path))
+    else:
+        candidates = []
+        for name in sorted(os.listdir(raw_dir)):
+            abs_path = os.path.join(raw_dir, name)
+            if os.path.isfile(abs_path):
+                candidates.append((f"raw/{name}", abs_path))
+
+    if not candidates:
+        raise HTTPException(status_code=404, detail="raw/ 下没有可复制的文件")
+
+    copied: List[dict] = []
+    for rel, src_path in candidates:
+        file_name = os.path.basename(src_path)
+        dest_name = generate_data_filename(session_root, file_name)
+        dest_path = os.path.join(session_root, dest_name)
+        try:
+            shutil.copy2(src_path, dest_path)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"复制失败 {rel}: {e}")
+        session_rel = dest_name
+        asset_rel = relative_path_for_project_asset(
+            project_root, session_root, sid, dest_path
+        )
+        register_upload(
+            project_id=project_id,
+            session_id=sid,
+            relative_path=asset_rel,
+            original_filename=file_name,
+            file_category=classify_file(file_name),
+        )
+        copied.append({"source": rel, "relative_path": session_rel})
+
+    return JSONResponse(
+        content={
+            "status": "success",
+            "msg": "copied from project raw to session workspace",
+            "data": {
+                "session_id": sid,
+                "project_id": project_id,
+                "copied": copied,
             },
         },
         status_code=200,

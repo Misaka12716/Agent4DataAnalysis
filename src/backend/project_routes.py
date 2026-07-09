@@ -59,7 +59,7 @@ def register_project_routes(app) -> None:
         from backend.project_service import ProjectService
 
         assert_project_access(project_id, current_user.user_id)
-        resp, err = ProjectService.get_project_detail(project_id)
+        resp, err = ProjectService.get_project_detail(project_id, current_user.user_id)
         if err:
             status = 404 if err == "项目不存在" else 400
             raise HTTPException(status_code=status, detail=err)
@@ -188,6 +188,8 @@ def register_project_routes(app) -> None:
             content={
                 "status": "success",
                 "message": "文件已写入项目 raw 目录",
+                "deprecated": True,
+                "notice": "项目 raw/ 上传不会自动进入分析链路；请创建会话后使用 POST /session/copy-from-project-raw 或直接 POST /session/upload-excel 上传到会话工作区。",
                 "project_id": project_id,
                 "relative_path": relative_path,
                 "original_filename": original_filename,

@@ -52,6 +52,7 @@ ap_stop_backend() {
 }
 
 ap_stop_frontend() {
+  pkill -f "streamlit run frontend/app.py" 2>/dev/null || true
   pkill -f "streamlit run frontend/frontend.py" 2>/dev/null || true
   pkill -f "streamlit run frontend/pages/template_analysis.py" 2>/dev/null || true
 }
@@ -63,7 +64,7 @@ ap_backend_pgrep() {
 }
 
 ap_frontend_pgrep() {
-  pgrep -af "streamlit run frontend/frontend.py" 2>/dev/null || true
+  pgrep -af "streamlit run frontend/app.py" 2>/dev/null || true
 }
 
 ap_ensure_streamlit_config() {
@@ -104,7 +105,7 @@ ap_run_frontend() {
   ap_ensure_streamlit_config
   cd "${root}/src"
   echo "[ap] 启动联调前端 http://${bind_host}:${port}"
-  exec python3 -m streamlit run frontend/frontend.py \
+  exec python3 -m streamlit run frontend/app.py \
     --server.port "${port}" \
     --server.address "${bind_host}" \
     --server.headless true

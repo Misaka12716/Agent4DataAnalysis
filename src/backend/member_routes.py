@@ -33,13 +33,58 @@ from db.rbac_store import RbacStore
 from utils.workspace_manager import resolve_project_root
 
 
+def _invalid_phone(phone: str) -> bool:
+    import re
+
+    return (not phone) or (not re.match(r"^1\d{10}$", phone.strip()))
+
+
+def _resolve_member_user_id(body: AddMemberRequest) -> int:
+    if body.user_id is not None and int(body.user_id) > 0:
+        return int(body.user_id)
+    phone = (body.phone or "").strip()
+    if _invalid_phone(phone):
+        raise HTTPException(status_code=400, detail="phone 无效")
+    user, err = RbacStore.get_user_by_phone(phone)
+    if err:
+        raise HTTPException(status_code=500, detail=err)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return int(user.get("id") or 0)
+
+
 def register_member_routes(app) -> None:
+    @app.get("/users/lookup")
+    async def lookup_user_by_phone(
+        phone: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        clean_phone = phone.strip()
+        if _invalid_phone(clean_phone):
+            raise HTTPException(status_code=400, detail="phone 无效")
+        user, err = RbacStore.get_user_by_phone(clean_phone)
+        if err:
+            raise HTTPException(status_code=500, detail=err)
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        return JSONResponse(
+            content={
+                "status": "success",
+                "data": {
+                    "user_id": int(user.get("id") or 0),
+                    "username": user.get("username"),
+                    "phone": user.get("phone"),
+                },
+            },
+            status_code=200,
+        )
+
     @app.get("/project/{project_id}/members")
     async def list_members(
         project_id: int,
         current_user: CurrentUser = Depends(get_current_user),
     ):
-        assert_member_manage_access(project_id, current_user.user_id)
+        assert_project_access(project_id, current_user.user_id)
         members, err = RbacStore.list_members(project_id)
         if err:
             raise HTTPException(status_code=500, detail=err)
@@ -58,14 +103,15 @@ def register_member_routes(app) -> None:
         role = body.role.strip().lower()
         if role not in VALID_PROJECT_ROLES:
             raise HTTPException(status_code=400, detail="role 无效")
-        user, err = RbacStore.get_user(body.user_id)
+        target_user_id = _resolve_member_user_id(body)
+        user, err = RbacStore.get_user(target_user_id)
         if err:
             raise HTTPException(status_code=500, detail=err)
         if not user:
             raise HTTPException(status_code=404, detail="用户不存在")
 
         perms = body.permissions if body.permissions else list(DEFAULT_MEMBER_PERMISSIONS)
-        member_id, err = RbacStore.add_member(project_id, body.user_id, role, perms)
+        member_id, err = RbacStore.add_member(project_id, target_user_id, role, perms)
         if err:
             status = 409 if "已存在" in str(err) else 400
             raise HTTPException(status_code=status, detail=err)
@@ -73,7 +119,7 @@ def register_member_routes(app) -> None:
             content={
                 "status": "success",
                 "msg": "member added",
-                "data": {"member_id": member_id, "project_id": project_id, "user_id": body.user_id},
+                "data": {"member_id": member_id, "project_id": project_id, "user_id": target_user_id},
             },
             status_code=201,
         )

@@ -30,6 +30,32 @@ def _row_to_response(row: Dict[str, Any]) -> dict:
     return item
 
 
+def _enrich_project_access(item: dict, user_id: int, project_row: Dict[str, Any]) -> dict:
+    from backend.permission_service import get_effective_project_permissions
+    from db.rbac_schema import PROJECT_ROLE_MANAGER
+    from db.rbac_store import RbacStore
+
+    perms, access_type, err = get_effective_project_permissions(
+        int(item.get("id") or 0),
+        user_id,
+        project_row,
+    )
+    if err:
+        return item
+    access = access_type
+    if access_type == "member":
+        member, _ = RbacStore.get_member(int(item.get("id") or 0), user_id)
+        role = str((member or {}).get("role") or "member").strip().lower()
+        if role == PROJECT_ROLE_MANAGER:
+            access = "project_manager"
+        else:
+            access = "member"
+    item["access"] = access
+    item["permissions"] = sorted(perms)
+    item["is_shared"] = access not in ("owner", "admin")
+    return item
+
+
 class ProjectService:
     @staticmethod
     def is_default_project(row: Optional[dict]) -> bool:
@@ -65,11 +91,20 @@ class ProjectService:
                 return None, err or "创建后查询个人默认项目失败"
 
         project_id = int(row.get("id") or 0)
+        return _row_to_response(row), None
+
+    @staticmethod
+    def bootstrap_user_projects(user_id: int) -> Tuple[Optional[dict], Optional[str]]:
+        """初始化/迁移脚本用：确保个人默认项目并将无 project_id 的历史会话归属到该项目。"""
+        default_row, err = ProjectService.ensure_default_project(user_id)
+        if err or not default_row:
+            return None, err or "无法创建个人默认项目"
+        project_id = int(default_row.get("id") or 0)
         if project_id > 0:
             _, err = ProjectStore.assign_orphan_sessions(user_id, project_id)
             if err:
                 return None, err
-        return _row_to_response(row), None
+        return default_row, None
 
     @staticmethod
     def resolve_project_id(user_id: int, project_id: Optional[int]) -> Tuple[int, Optional[str]]:
@@ -129,6 +164,7 @@ class ProjectService:
         default_item = None
         for row in rows:
             item = _row_to_response(row)
+            item = _enrich_project_access(item, user_id, row)
             cnt, _ = ProjectStore.count_sessions_by_project(int(item.get("id") or 0))
             item["session_count"] = cnt
             if item.get("is_default"):
@@ -140,16 +176,12 @@ class ProjectService:
         return result, None
 
     @staticmethod
-    def get_project_detail(project_id: int) -> Tuple[Optional[dict], Optional[str]]:
+    def get_project_detail(project_id: int, viewer_user_id: Optional[int] = None) -> Tuple[Optional[dict], Optional[str]]:
         row, err = ProjectStore.get_project(project_id)
         if err:
             return None, err
         if not row:
             return None, "项目不存在"
-        if str(row.get("name") or "") == DEFAULT_PROJECT_INTERNAL_NAME:
-            user_id = int(row.get("user_id") or 0)
-            if user_id > 0:
-                ProjectStore.assign_orphan_sessions(user_id, project_id)
         item = _row_to_response(row)
         root = resolve_project_root(project_id) or str(row.get("workspace_abs_path") or "")
         subdirs = {}
@@ -158,6 +190,8 @@ class ProjectService:
         cnt, _ = ProjectStore.count_sessions_by_project(project_id)
         item["session_count"] = cnt
         item["subdirs"] = subdirs
+        if viewer_user_id and viewer_user_id > 0:
+            item = _enrich_project_access(item, viewer_user_id, row)
         return item, None
 
     @staticmethod
@@ -245,14 +279,5 @@ class ProjectService:
         row, err = ProjectStore.get_project(project_id)
         if err:
             return [], err
-        if row and str(row.get("name") or "") == DEFAULT_PROJECT_INTERNAL_NAME:
-            user_id = int(row.get("user_id") or 0)
-            if user_id > 0:
-                ProjectStore.assign_orphan_sessions(user_id, project_id)
         sessions, err = ProjectStore.list_sessions_by_project(project_id)
         return sessions, err
-
-    @staticmethod
-    def uses_legacy_session_layout(project_row: dict) -> bool:
-        """个人默认项目的新会话仍使用旧版 workspaces/<user_id>/<session_id>/ 布局。"""
-        return ProjectService.is_default_project(project_row)

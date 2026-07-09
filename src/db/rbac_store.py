@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -53,6 +54,15 @@ def _parse_permissions(raw: Any) -> List[str]:
         except (json.JSONDecodeError, TypeError):
             pass
     return list(DEFAULT_MEMBER_PERMISSIONS)
+
+
+def _json_safe_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    item = dict(row)
+    for key in ("created_at", "updated_at"):
+        val = item.get(key)
+        if isinstance(val, (datetime.datetime, datetime.date)):
+            item[key] = val.isoformat()
+    return item
 
 
 def _ensure_rbac_schema() -> Tuple[bool, Optional[str]]:
@@ -230,7 +240,7 @@ class RbacStore:
             return None, None
         row = dict(rows[0])
         row["permissions"] = _parse_permissions(row.get("permissions"))
-        return row, None
+        return _json_safe_row(row), None
 
     @staticmethod
     def list_members(project_id: int) -> Tuple[List[Dict[str, Any]], Optional[str]]:
@@ -251,7 +261,7 @@ class RbacStore:
         for row in rows or []:
             item = dict(row)
             item["permissions"] = _parse_permissions(item.get("permissions"))
-            result.append(item)
+            result.append(_json_safe_row(item))
         return result, None
 
     @staticmethod
@@ -395,7 +405,7 @@ class RbacStore:
             return None, err
         if not rows:
             return None, None
-        return rows[0], None
+        return _json_safe_row(dict(rows[0])), None
 
     @staticmethod
     def list_tasks(project_id: int) -> Tuple[List[ProjectTaskRow], Optional[str]]:
@@ -409,7 +419,7 @@ class RbacStore:
         rows, err = mysql_handler.query(sql, (project_id,))
         if err:
             return [], err
-        return rows or [], None
+        return [_json_safe_row(dict(r)) for r in (rows or [])], None
 
     @staticmethod
     def delete_asset(project_id: int, relative_path: str) -> Tuple[bool, Optional[str]]:

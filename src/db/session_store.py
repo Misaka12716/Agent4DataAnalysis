@@ -89,9 +89,9 @@ class SessionStore:
 
     @staticmethod
     def get_sessions_by_user_id(user_id: int) -> Tuple[List[Dict[str, Optional[str]]], Optional[str]]:
-        """根据 user_id 查询会话列表，包含 session_id 和标题（按创建顺序倒序）。"""
+        """根据 user_id 查询会话列表，包含 session_id、title、project_id（按创建顺序倒序）。"""
         sql = (
-            f"SELECT session_id, title FROM {TABLE_SESSION_USER} "
+            f"SELECT session_id, title, project_id FROM {TABLE_SESSION_USER} "
             "WHERE user_id = %s ORDER BY id DESC"
         )
         rows, err = mysql_handler.query(sql, (user_id,))
@@ -101,6 +101,7 @@ class SessionStore:
             {
                 "session_id": str(row.get("session_id")),
                 "title": (row.get("title") or None),
+                "project_id": row.get("project_id"),
             }
             for row in rows
             if row.get("session_id")
@@ -108,10 +109,14 @@ class SessionStore:
         return sessions, None
 
     @staticmethod
-    def get_accessible_sessions(user_id: int) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    def get_accessible_sessions(
+        user_id: int,
+        project_id: Optional[int] = None,
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """
         返回当前用户可访问的会话列表（自己创建的 + 可访问项目内的共享会话）。
-        字段：session_id, title, project_id（可选）, access（owner | shared）
+        字段：session_id, title, project_id, access（owner | shared）
+        project_id 为正整数时仅返回归属该项目的会话。
         """
         from db.rbac_store import RbacStore
         from db.project_store import ProjectStore
@@ -131,6 +136,7 @@ class SessionStore:
             result.append({
                 "session_id": sid,
                 "title": s.get("title"),
+                "project_id": s.get("project_id"),
                 "access": "owner",
             })
 
@@ -153,9 +159,16 @@ class SessionStore:
                 result.append({
                     "session_id": sid,
                     "title": s.get("title"),
-                    "project_id": pid,
+                    "project_id": s.get("project_id") or pid,
                     "access": "shared",
                 })
+
+        if project_id is not None and int(project_id) > 0:
+            pid_filter = int(project_id)
+            result = [
+                s for s in result
+                if int(s.get("project_id") or 0) == pid_filter
+            ]
 
         return result, None
 

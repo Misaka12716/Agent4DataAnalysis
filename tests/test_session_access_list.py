@@ -23,7 +23,7 @@ def test_get_accessible_sessions_merges_shared(mock_proj_sessions, mock_list_pro
     from db.session_store import SessionStore
 
     mock_own.return_value = (
-        [{"session_id": "s-own", "title": "我的会话"}],
+        [{"session_id": "s-own", "title": "我的会话", "project_id": 1}],
         None,
     )
     mock_list_projects.return_value = (
@@ -43,8 +43,31 @@ def test_get_accessible_sessions_merges_shared(mock_proj_sessions, mock_list_pro
     assert len(sessions) == 2
     by_id = {s["session_id"]: s for s in sessions}
     assert by_id["s-own"]["access"] == "owner"
+    assert by_id["s-own"]["project_id"] == 1
     assert by_id["s-shared"]["access"] == "shared"
     assert by_id["s-shared"]["project_id"] == 1
+
+
+@patch("db.session_store.SessionStore.get_sessions_by_user_id")
+@patch("db.rbac_store.RbacStore.list_projects_for_user")
+@patch("db.project_store.ProjectStore.list_sessions_by_project")
+def test_get_accessible_sessions_filter_by_project(mock_proj_sessions, mock_list_projects, mock_own):
+    from db.session_store import SessionStore
+
+    mock_own.return_value = (
+        [
+            {"session_id": "s-a", "title": "A", "project_id": 1},
+            {"session_id": "s-b", "title": "B", "project_id": 2},
+        ],
+        None,
+    )
+    mock_list_projects.return_value = ([], None)
+    mock_proj_sessions.return_value = ([], None)
+
+    sessions, err = SessionStore.get_accessible_sessions(20, project_id=1)
+    assert err is None
+    assert len(sessions) == 1
+    assert sessions[0]["session_id"] == "s-a"
 
 
 @patch("backend.permission_service.RbacStore.get_member")

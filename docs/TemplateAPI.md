@@ -1,8 +1,10 @@
 # 模板分析 API — 接口文档（给前端对接用）
 
-> 模板分析已整合进 AgentPlatform 主框架。联调 UI 见 `src/frontend/frontend.py` 的「模板分析」页（`bash scripts/start.sh --with-frontend`）。**正式产品前端请直接按本文档对接 HTTP 接口。**
+> 模板分析已整合进 AgentPlatform 主框架。联调 UI 见 `src/frontend/app.py` 的「模板分析」页（`bash scripts/start.sh --with-frontend`）。**正式产品前端请直接按本文档对接 HTTP 接口。**
 >
-> 本文档覆盖 **模板管理 + 模板驱动分析** 接口。登录、会话、文件上传、项目管理等见 [`BackendAPI.md`](BackendAPI.md) 与 [`AUTH.md`](AUTH.md)。
+> 本文档覆盖 **模板管理 + 模板驱动分析** 接口。
+>
+> **项目管理、RBAC、会话与鉴权** 见 [`FrontendIntegrationGuide.md`](FrontendIntegrationGuide.md)（产品前端主入口）；接口字段细节见 [`BackendAPI.md`](BackendAPI.md) 与 [`AUTH.md`](AUTH.md)。
 
 ---
 

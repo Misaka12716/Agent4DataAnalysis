@@ -57,7 +57,9 @@
 | `/project/{project_id}/sessions` | `GET` | 查询项目下会话列表（需 Bearer Token + 项目归属） |
 | `/session/create` | `POST` | 创建会话：在指定项目下生成 session_id 与工作区（需 Bearer Token + project_id） |
 | `/session/save-title` | `POST` | 保存会话标题：按 session_id 首次写入标题（需 Bearer Token + 会话归属） |
-| `/session/list` | `GET` | 查询当前用户会话列表（需 Bearer Token） |
+| `/session/list` | `GET` | 查询可访问会话列表；可选 `?project_id=` 过滤（需 Bearer Token） |
+| `/session/meta` | `GET` | 查询会话元数据（project_id、工作区路径等） |
+| `/session/copy-from-project-raw` | `POST` | 将项目 raw/ 文件复制到会话工作区（分析入口） |
 | `/session/upload-excel` | `POST` | 上传文件到会话工作区（需 Bearer Token + 会话归属） |
 | `/session/workspace-tree` | `GET` | 查询会话工作区目录树（需 Bearer Token + 会话归属） |
 | `/session/snapshot` | `GET` | 获取会话内容快照（需 Bearer Token + 会话归属） |
@@ -267,17 +269,39 @@
   - `500`：数据库写入失败
 - 实现逻辑：
   1. 从 Bearer Token 解析当前 `user_id`。
-  2. 若未传 `project_id`，自动解析/创建「个人默认」项目，并将该用户历史无 `project_id` 的会话归属到该项目。
+  2. 若未传 `project_id`，自动解析/创建「个人默认」项目。
   3. 校验项目归属且未归档。
-  4. 「个人默认」项目下新建会话仍使用旧路径 `workspaces/<user_id>/<session_id>/`；其他项目使用 `.../<project_id>/sessions/<session_id>/`。
+  4. 所有新项目（含「个人默认」）统一使用 `.../<project_id>/sessions/<session_id>/` 布局；历史 legacy 路径由 `resolve_workspace_root` 只读兼容，可通过 `scripts/migrate-legacy-sessions.sh` 迁移。
+
+---
+
+### 3.5.1 查询会话元数据
+- 路径：`GET /session/meta`
+- 鉴权：`Authorization: Bearer <access_token>`（必填）
+- 请求参数（query）：
+  - `session_id: str`（必填）
+- 成功返回字段（`data`）：
+  - `session_id`, `user_id`, `project_id`, `title`, `workspace_abs_path`
+- 用途：前端切换会话时同步项目上下文与权限。
+
+---
+
+### 3.5.2 从项目 raw/ 复制到会话工作区
+- 路径：`POST /session/copy-from-project-raw`
+- 鉴权：Bearer + 会话 `数据上传` 权限
+- 请求体（JSON）：
+  - `session_id: str`（必填）
+  - `relative_paths: list[str]`（可选；默认复制 `raw/` 下全部文件）
+- 说明：分析链路只读会话工作区；项目 `raw/` 预置文件需经此接口或会话上传进入分析。
 
 ---
 
 ### 3.6 查询用户会话列表
 - 路径：`GET /session/list`
-- 处理函数：`build_user_sessions_response(user_id: int)`
+- 处理函数：`build_user_sessions_response(user_id, project_id?)`
 - 鉴权：`Authorization: Bearer <access_token>`（必填）
-- 请求参数（query）：无
+- 请求参数（query）：
+  - `project_id: int`（**可选**；传入时仅返回归属该项目的可访问会话）
 - 请求体：无
 - 成功返回格式：`application/json`
   - `status: str`
@@ -286,6 +310,8 @@
   - `data.sessions: list[object]`
     - `session_id: str`
     - `title: str | null`
+    - `project_id: int | null`
+    - `access: str`（`owner` | `shared`）
 - 成功返回示例（`200`）：
 ```json
 {
@@ -296,11 +322,15 @@
     "sessions": [
       {
         "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
-        "title": "Q1 销售分析"
+        "title": "Q1 销售分析",
+        "project_id": 1,
+        "access": "owner"
       },
       {
         "session_id": "71e4f870-2d71-4a23-af6d-6cf60c4fe1fd",
-        "title": null
+        "title": null,
+        "project_id": 2,
+        "access": "shared"
       }
     ]
   }
@@ -311,8 +341,8 @@
   - `500`：数据库查询失败
 - 实现逻辑：
   1. 从 Bearer Token 解析当前 `user_id`。
-  2. 查询 `session_user` 表中该用户对应的全部 `session_id/title`（按创建顺序倒序）。
-  3. 返回 `sessions` 数组；无会话时返回空数组。
+  2. 合并「自己创建的」与「可访问项目内的共享」会话；可选按 `project_id` 过滤。
+  3. `GET /project/{id}/sessions` 仍可用，语义等价于 `GET /session/list?project_id={id}`（需项目读权限）。
 
 ---
 
@@ -651,10 +681,11 @@ data: {"type":"snapshot","session_id":"...","content":"...","version":35,"timest
 - 归档成功响应 `data.archive_snapshot_path` 为快照相对项目根的路径（如 `archive/20260705-153045`）。
 - 归档后禁止新建会话、上传、分析。
 
-### 3.18 项目级上传
+### 3.18 项目级上传（预置 raw/，不直接进入分析）
 - 路径：`POST /project/{project_id}/upload`
 - Content-Type：`multipart/form-data`，字段 `file`
 - 文件写入 `raw/`，并登记 `project_assets`（`asset_type=upload`）。
+- **注意**：Agent 分析只读会话工作区。若需分析 raw/ 中文件，请使用 `POST /session/copy-from-project-raw` 或直接 `POST /session/upload-excel`。响应含 `deprecated: true` 与 `notice` 说明。
 
 ### 3.19 查询项目资产
 - 路径：`GET /project/{project_id}/assets`
@@ -663,7 +694,8 @@ data: {"type":"snapshot","session_id":"...","content":"...","version":35,"timest
 
 ### 3.20 查询项目下会话
 - 路径：`GET /project/{project_id}/sessions`
-- 返回 `session_user WHERE project_id=?` 的 session_id / title 列表。
+- 返回 `session_user WHERE project_id=?` 的 session_id / title / project_id 列表。
+- 等价于 `GET /session/list?project_id={project_id}`（后者合并共享会话语义，推荐新接入使用 `/session/list`）。
 
 ### 3.21 平台用户管理（admin）
 - `POST /admin/users` — 创建用户（body: username, phone, platform_role, status）
@@ -671,17 +703,22 @@ data: {"type":"snapshot","session_id":"...","content":"...","version":35,"timest
 - `GET /admin/users/{user_id}` — 用户详情
 - `PUT /admin/users/{user_id}` — 更新用户
 
-### 3.22 项目成员管理
-- `GET /project/{project_id}/members`
-- `POST /project/{project_id}/members` — body: user_id, role, permissions[]
+### 3.22 用户查找（邀请协作者）
+- `GET /users/lookup?phone=13800138001` — 需 Bearer Token；精确匹配手机号，返回 `{ user_id, username, phone }`；未找到返回 404
+
+### 3.23 项目成员管理
+- `GET /project/{project_id}/members` — 项目成员均可读取成员列表
+- `POST /project/{project_id}/members` — body: `user_id` 或 `phone`（二选一）, `role`, `permissions[]`
 - `PUT /project/{project_id}/members/{user_id}`
 - `DELETE /project/{project_id}/members/{user_id}`
 
-### 3.23 项目文件下载 / 删除
+项目列表/详情响应新增字段：`access`（owner | project_manager | member | admin）、`permissions`（权限码数组）、`is_shared`（是否为共享项目）
+
+### 3.24 项目文件下载 / 删除
 - `GET /project/{project_id}/download?relative_path=raw/data.csv` — 需 `data_download`
 - `DELETE /project/{project_id}/assets` — body: `{ "relative_path": "..." }`，需 `data_delete`
 
-### 3.24 占位任务 API
+### 3.25 占位任务 API
 - `POST /project/{project_id}/tasks` — body: task_type, session_id?, payload?
 - `GET /project/{project_id}/tasks`
 - `GET /project/{project_id}/tasks/{task_id}`
@@ -695,8 +732,8 @@ data: {"type":"snapshot","session_id":"...","content":"...","version":35,"timest
 ### 4.1 工作区与执行 Runtime
 
 - **项目目录布局**：`{TEMP_FOLDER}/workspaces/<user_id>/<project_id>/`，含子目录 `raw/`、`processed/`、`outputs/`、`archive/`、`sessions/`。
-- **新会话目录**：`.../<project_id>/sessions/<session_id>/`。
-- **历史会话目录**（无 project_id）：`{TEMP_FOLDER}/workspaces/<user_id>/<session_id>/`（向后兼容）。
+- **新会话目录**：`.../<project_id>/sessions/<session_id>/`（含「个人默认」项目）。
+- **历史 legacy 目录**：`{TEMP_FOLDER}/workspaces/<user_id>/<session_id>/`（只读兼容；迁移见 `scripts/migrate-legacy-sessions.sh`）。
 - **权威路径**：`session_user.workspace_abs_path` / `projects.workspace_abs_path`；`resolve_workspace_root(session_id)` 优先读 DB。
 - **统一执行层**：[`src/runtime/`](../src/runtime/) 提供 `ensure_runtime(session_id)`，上层通过 `runtime.files.*` / `runtime.commands.run` 读写与执行，不再在各模块分散判断沙箱开关。
 - **默认后端**：本地 Runtime（`CUBE_SANDBOX_ENABLED=0`），Worker 使用 **`RUNNER_PYTHON`** 指向的独立 conda 环境（如 `agentPlatform-runner`），与运行 FastAPI 的 `agentPlatform` 环境分离。
@@ -706,8 +743,9 @@ data: {"type":"snapshot","session_id":"...","content":"...","version":35,"timest
   - 由 `/session/create` 创建并维护
   - 记录 `session_id -> user_id + project_id(可空) + title + workspace_abs_path`
   - `/session/save-title` 按 `session_id` 首次写入 `title`
-  - `/session/list` 按 token 中的当前 `user_id` 读取其全部 `session_id/title`
-  - `/project/{id}/sessions` 按 `project_id` 过滤
+  - `/session/list` 返回可访问会话（含 `project_id`、`access`）；可选 `?project_id=` 过滤
+  - `/session/meta` 供前端同步会话所属项目
+  - `/project/{id}/sessions` 等价于按项目过滤的会话列表（兼容保留）
 - `projects` / `project_assets`：
   - 由 `/project/create` 等接口维护
   - `project_assets` 登记上传与分析产出（`asset_type`: `upload` | `analysis_output`）

@@ -3,7 +3,7 @@
 ## 前置条件
 
 1. **MySQL 已就绪**（会话持久化依赖）。
-2. **默认使用本地 Runtime**（`tmp/workspaces/<user_id>/<session_id>/`），无需 Cube Sandbox 即可创建会话、上传与分析。
+2. **默认使用本地 Runtime**（会话工作区 `tmp/workspaces/<user_id>/<project_id>/sessions/<session_id>/`），无需 Cube Sandbox 即可创建会话、上传与分析。
 3. **双 Python 环境**：`agentPlatform`（后端服务）与 `agentPlatform-runner`（Agent 生成代码的执行环境，相互隔离）。
 4. 若需可选 Cube Sandbox 隔离执行，见下方「Cube Sandbox 配置（可选）」。
 
@@ -31,7 +31,7 @@ bash scripts/diagnose-runner-env.sh
 
 执行层位于 [`src/runtime/`](../src/runtime/)，通过 `ensure_runtime(session_id)` 统一读写文件与运行 `python3` 脚本。
 
-- **工作区路径**：`tmp/workspaces/<user_id>/<session_id>/`
+- **工作区路径**：项目 `tmp/workspaces/<user_id>/<project_id>/`；会话 `.../sessions/<session_id>/`（legacy 旧路径只读兼容，迁移见 `scripts/migrate-legacy-sessions.sh`）
 - **代码执行**：Worker 使用 `RUNNER_PYTHON`（`agentPlatform-runner`），与 FastAPI 主环境隔离
 - 默认 `CUBE_SANDBOX_ENABLED=0`（见 [`src/runtime/config.py`](../src/runtime/config.py)）
 

@@ -14,7 +14,8 @@
 
 ## 功能概览
 
-- 会话级工作区：每个用户在 `TEMP_FOLDER/workspaces/<user_id>/<session_id>/` 拥有独立目录；默认经 **本地 Runtime**（[`src/runtime/`](src/runtime/)）读写与执行 Python。
+- 会话级工作区：每个用户在 `TEMP_FOLDER/workspaces/<user_id>/<project_id>/sessions/<session_id>/` 拥有独立目录（历史数据可能仍在 `.../<user_id>/<session_id>/`，只读兼容）；默认经 **本地 Runtime**（[`src/runtime/`](src/runtime/)）读写与执行 Python。
+- **项目模型**：Project 是 RBAC 与资产容器；Session 是一次分析/对话的执行单元。分析前须创建会话并将数据上传到会话工作区（或从项目 `raw/` 复制，见 `POST /session/copy-from-project-raw`）。
 - 代码执行：Worker 通过 **独立 Runner 环境**（`RUNNER_PYTHON` / `agentPlatform-runner`）运行 `python3 <相对路径>`，与 FastAPI 主环境隔离。
 - 文件上传：支持将 `xlsx/xls/csv` 等写入工作区根目录，并按 `data.xxx`、`data_1.xxx` 规则命名。
 - 任务流式分析：后端通过 SSE 持续推送编排决策、各阶段事件与报告片段；每条有效负载会先写入 MySQL 会话内容（累计全文 + 版本号），再推送给客户端。
@@ -103,7 +104,8 @@ python -m ipykernel install --user --name agentPlatform --display-name "Python (
   - `MYSQL_PORT`（支持环境变量）
   - `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DB`
 - 工作区与临时路径：
-  - `TEMP_FOLDER`：会话工作区位于 `TEMP_FOLDER/workspaces/<user_id>/<session_id>`
+  - `TEMP_FOLDER`：项目工作区位于 `TEMP_FOLDER/workspaces/<user_id>/<project_id>/`；会话位于其下 `sessions/<session_id>/`
+  - 历史 legacy 布局 `workspaces/<user_id>/<session_id>/` 仍可读；迁移见 `scripts/migrate-legacy-sessions.sh`
   - 仓库内 `PATH` 等路径为开发机示例，部署到新环境时请改为本机实际路径
 - **执行 Runtime**（默认本地，见 [`src/runtime/config.py`](src/runtime/config.py)）：
 
@@ -234,8 +236,8 @@ curl http://localhost:52716/health
 
 ## 工作机制（与代码一致）
 
-1. **创建会话**：`POST /session/create` 初始化工作区目录 `tmp/workspaces/<user_id>/<session_id>/`，并绑定本地 Runtime（`ensure_runtime`）。
-2. **上传**：文件经 `runtime.files.write` 写入工作区；Reader 按类型生成 digest（图片可走 Vision 多模态），Planner 侧列举工作区文件并读取结构样例。
+1. **创建会话**：`POST /session/create` 在指定项目下初始化 `tmp/workspaces/<user_id>/<project_id>/sessions/<session_id>/`，并绑定本地 Runtime（`ensure_runtime`）。
+2. **上传**：文件经 `runtime.files.write` 写入**会话工作区**（`POST /session/upload-excel`）；项目 `raw/` 预置文件需 `POST /session/copy-from-project-raw` 复制到会话后再分析。
 3. **Supervisor**：每次子阶段结束后回到 Supervisor，由结构化 LLM 决策下一步（`planner` / `coder` / `worker` / `reporter` / `finish`）；非法跳步会被代码侧「钳制」为合法路由。
 4. **Planner**：产出包含「需求解析」「步骤分解」等字段的规划；无效规划会触发重试直至上限。
 5. **Coder**：首次生成并写入工作区代码（默认 `main.py`）；Worker 失败且未超修正次数时走「修正写入」路径，并附带 stderr 等错误摘要。
@@ -274,7 +276,7 @@ curl http://localhost:52716/health
 
 ### 3) 上传后找不到文件
 
-系统会将文件重命名为 `data.xxx`、`data_1.xxx` 等统一命名，请在返回值中的 `relative_path` 查看实际文件名。工作区位于 `tmp/workspaces/<user_id>/<session_id>/`。
+系统会将文件重命名为 `data.xxx`、`data_1.xxx` 等统一命名，请在返回值中的 `relative_path` 查看实际文件名。会话工作区位于 `tmp/workspaces/<user_id>/<project_id>/sessions/<session_id>/`。
 
 ### 4) Worker 报错或缺少 pandas 等包
 
@@ -298,6 +300,7 @@ curl http://localhost:52716/health
 
 ## 相关文档
 
+- **正式前端对接（产品 UI）**：[`docs/FrontendIntegrationGuide.md`](docs/FrontendIntegrationGuide.md)
 - 启动说明：[`docs/StartInstruction.md`](docs/StartInstruction.md)
 - 模板分析 API：[`docs/TemplateAPI.md`](docs/TemplateAPI.md)
 - Cube Sandbox 部署：[`docs/Cubesandbox-deploy.md`](docs/Cubesandbox-deploy.md)

@@ -1,6 +1,6 @@
 """
 联调前端：面向数据科学场景的多智能体后端，用于测试会话上传、工作区与流式分析等接口。
-运行方式（在 src 目录下）: streamlit run frontend/frontend.py
+运行方式（在 src 目录下）: streamlit run frontend/app.py
 """
 import sys
 from pathlib import Path
@@ -14,9 +14,10 @@ import httpx
 
 from frontend.page_utils import (
     apply_login_payload,
+    apply_session_selection,
     render_acceptance_login_button,
     refresh_user_profile,
-    resolve_project_id_for_permission,
+    sync_session_project_context,
 )
 
 # 后端地址（与 backend/server 默认端口一致）
@@ -58,8 +59,8 @@ def _render_session_list_buttons(sessions: list, key_prefix: str) -> None:
             label += " (共享)"
         safe_key = f"{key_prefix}_{idx}_{sid.replace('-', '_')}"
         if st.button(label, key=safe_key, use_container_width=True, help=sid):
-            st.session_state["session_id"] = sid
-            st.session_state["_reset_session_id"] = sid
+            pid = int((item or {}).get("project_id") or 0) or None
+            apply_session_selection(sid, project_id=pid)
             st.rerun()
         st.caption(sid)
 
@@ -71,12 +72,16 @@ def _auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _fetch_user_sessions_list(api_base: str):
+def _fetch_user_sessions_list(api_base: str, project_id: int = 0):
     """返回 (sessions, error_msg)。error_msg 非空表示请求失败。"""
     try:
+        params = {}
+        if project_id > 0:
+            params["project_id"] = project_id
         r = httpx.get(
             f"{api_base.rstrip('/')}/session/list",
             headers=_auth_headers(),
+            params=params or None,
             timeout=10.0,
         )
         r.raise_for_status()
@@ -105,24 +110,6 @@ def _fetch_project_list(api_base: str):
     except Exception as e:
         return [], _short_exc(e)
 
-
-def _fetch_project_sessions(api_base: str, project_id: int):
-    try:
-        r = httpx.get(
-            f"{api_base.rstrip('/')}/project/{project_id}/sessions",
-            headers=_auth_headers(),
-            timeout=10.0,
-        )
-        r.raise_for_status()
-        data = r.json()
-        sessions = ((data.get("data") or {}).get("sessions")) or []
-        return sessions, None
-    except httpx.HTTPStatusError as e:
-        return [], f"项目会话列表失败 {e.response.status_code}: {_short_text(e.response.text, 200)}"
-    except Exception as e:
-        return [], _short_exc(e)
-
-
 def _render_project_list_buttons(projects: list, key_prefix: str) -> None:
     if not projects:
         st.caption("暂无项目。")
@@ -136,13 +123,17 @@ def _render_project_list_buttons(projects: list, key_prefix: str) -> None:
         label = f"{idx + 1}. {name}"
         if (item or {}).get("is_default"):
             label = f"{idx + 1}. {name} ★"
+        if (item or {}).get("is_shared"):
+            label += " [共享]"
         if status == "archived":
             label += " [已归档]"
         safe_key = f"{key_prefix}_{idx}_{pid}"
         if st.button(label, key=safe_key, use_container_width=True):
             st.session_state["current_project_id"] = pid
             st.session_state["session_id"] = ""
+            st.session_state["session_project_id"] = 0
             st.session_state["_reset_session_id"] = ""
+            st.session_state["_synced_session_id"] = ""
             st.rerun()
 
 
@@ -319,6 +310,8 @@ if "platform_role" not in st.session_state:
 if "permissions_summary" not in st.session_state:
     st.session_state["permissions_summary"] = {}
 
+if "session_project_id" not in st.session_state:
+    st.session_state["session_project_id"] = 0
 if "session_id" not in st.session_state:
     st.session_state["session_id"] = ""
 if "session_id_input" not in st.session_state:
@@ -448,8 +441,8 @@ with st.sidebar:
                 if not new_id:
                     st.error("创建会话成功但未返回 session_id")
                 else:
-                    st.session_state["session_id"] = new_id
-                    st.session_state["_reset_session_id"] = new_id
+                    new_pid = int(((resp.get("data") or {}).get("project_id") or 0))
+                    apply_session_selection(new_id, project_id=new_pid or None)
                     st.success(f"会话已创建: {new_id}")
                     st.rerun()
             except httpx.HTTPStatusError as e:
@@ -460,12 +453,8 @@ with st.sidebar:
         st.caption("未登录时无法创建会话：请使用侧栏 **账户** 中的「登录 / 注册」。")
 
     if current_user_id > 0:
-        if current_project_id > 0:
-            sessions, err = _fetch_project_sessions(api_base, current_project_id)
-            list_title = "当前项目会话"
-        else:
-            sessions, err = _fetch_user_sessions_list(api_base)
-            list_title = "全部会话（含历史无项目）"
+        sessions, err = _fetch_user_sessions_list(api_base, current_project_id)
+        list_title = "当前项目会话" if current_project_id > 0 else "全部可访问会话"
         if err:
             st.session_state["last_user_sessions"] = []
             st.error(err)
@@ -478,6 +467,14 @@ with st.sidebar:
         st.caption("登录后可查看并切换您的会话列表。")
 
 st.session_state["session_id"] = session_id
+if session_id.strip() and current_user_id > 0:
+    prev_sid = str(st.session_state.get("_synced_session_id") or "")
+    if session_id.strip() != prev_sid:
+        sync_session_project_context(session_id.strip())
+        st.session_state["_synced_session_id"] = session_id.strip()
+elif not session_id.strip():
+    st.session_state["session_project_id"] = 0
+    st.session_state["_synced_session_id"] = ""
 
 from frontend.pages.admin_users import render_admin_users_page
 from frontend.pages.project_members import render_project_members_page

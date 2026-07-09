@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class AdminCreateUserRequest(BaseModel):
@@ -18,9 +18,18 @@ class AdminUpdateUserRequest(BaseModel):
 
 
 class AddMemberRequest(BaseModel):
-    user_id: int
+    user_id: Optional[int] = None
+    phone: Optional[str] = None
     role: str = "member"
     permissions: List[str] = []
+
+    @model_validator(mode="after")
+    def require_user_id_or_phone(self) -> "AddMemberRequest":
+        has_uid = self.user_id is not None and int(self.user_id) > 0
+        has_phone = bool((self.phone or "").strip())
+        if has_uid == has_phone:
+            raise ValueError("请提供 user_id 或 phone 其中之一")
+        return self
 
 
 class UpdateMemberRequest(BaseModel):

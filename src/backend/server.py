@@ -23,6 +23,8 @@ from backend.api_models import (
     LoginWithSmsRequest,
     UpdateUsernameRequest,
     SaveSessionTitleRequest,
+    CreateSessionRequest,
+    CopyProjectRawRequest,
 )
 from backend.auth_service import (
     build_send_sms_code_response,
@@ -41,6 +43,8 @@ from backend.route_services import (
     build_user_sessions_response,
     build_save_session_title_response,
     build_session_workspace_tree_response,
+    build_session_meta_response,
+    build_copy_project_raw_to_session_response,
 )
 
 # -------------------------- 配置与初始化 --------------------------
@@ -72,13 +76,39 @@ async def health_check():
 # -------------------------- 会话工作区与状态接口 --------------------------
 
 @app.post("/session/create")
-async def create_session(current_user: CurrentUser = Depends(get_current_user)):
-    return build_create_session_response(current_user.user_id)
+async def create_session(
+    body: CreateSessionRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    return build_create_session_response(current_user.user_id, body.project_id)
 
 
 @app.get("/session/list")
-async def list_user_sessions(current_user: CurrentUser = Depends(get_current_user)):
-    return build_user_sessions_response(current_user.user_id)
+async def list_user_sessions(
+    project_id: int | None = None,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    return build_user_sessions_response(current_user.user_id, project_id=project_id)
+
+
+@app.get("/session/meta")
+async def session_meta(
+    session_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    return build_session_meta_response(session_id, current_user.user_id)
+
+
+@app.post("/session/copy-from-project-raw")
+async def session_copy_from_project_raw(
+    body: CopyProjectRawRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    return build_copy_project_raw_to_session_response(
+        body.session_id,
+        body.relative_paths,
+        current_user.user_id,
+    )
 
 
 @app.post("/session/save-title")

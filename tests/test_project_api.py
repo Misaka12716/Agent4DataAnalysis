@@ -100,6 +100,31 @@ def mock_stores(isolated_workspaces):
         patch("db.session_store.SessionStore.get_session_user"),
         patch("db.session_store.SessionStore.create_session", return_value=(True, None)),
         patch("db.rbac_store.RbacStore.list_member_project_ids", return_value=([], None)),
+        patch(
+            "backend.project_service.ProjectService.ensure_default_project",
+            return_value=({"id": 99, "name": "个人默认", "is_default": True}, None),
+        ),
+        patch(
+            "backend.permission_service.get_effective_project_permissions",
+            side_effect=lambda pid, uid, row=None: (
+                (
+                    {
+                        "data_upload",
+                        "data_delete",
+                        "data_download",
+                        "data_annotate",
+                        "data_review",
+                        "analysis_create",
+                        "training_create",
+                        "member_manage",
+                    },
+                    "owner",
+                    None,
+                )
+                if int((row or {}).get("user_id") or 0) == uid
+                else (set(), "none", None)
+            ),
+        ),
     ]
     started = [p.start() for p in patches]
     mocks = {
@@ -175,15 +200,17 @@ def test_session_create_without_project_id_uses_default(client, auth_headers, mo
     mocks["get_project"].side_effect = lambda pid: (active, None)
     with patch(
         "backend.project_service.ProjectService.resolve_project_id", return_value=(1, None)
-    ), patch(
-        "backend.project_service.ProjectService.uses_legacy_session_layout", return_value=True
     ), patch("backend.route_services.init_workspace") as mock_init, patch(
         "backend.route_services.ensure_runtime"
     ), patch("backend.route_services.persist_workspace_snapshot"):
-        mock_init.return_value = str(project_root / "legacy-sid")
+        mock_init.return_value = str(project_root / "sessions" / "new-sid")
         r = client.post("/session/create", json={}, headers=auth_headers)
     assert r.status_code == 200
     assert "session_id" in r.json()["data"]
+    mock_init.assert_called_once()
+    call_kwargs = mock_init.call_args
+    assert call_kwargs[0][0] == 10  # user_id from auth fixture
+    assert call_kwargs[1].get("project_id") == 1
 
 
 def test_project_upload_and_assets(client, auth_headers, mock_stores):

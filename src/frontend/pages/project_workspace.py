@@ -9,18 +9,21 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 import httpx
-import pandas as pd
 import streamlit as st
 
 from frontend.page_utils import (
     API_BASE,
+    api_base_url,
+    api_delete,
     api_get,
     api_post,
     auth_headers,
     auth_headers_upload,
-    can_analyze,
+    can_delete,
+    can_download,
     can_manage_project,
     can_upload,
+    format_permission_labels,
     is_logged_in,
     refresh_user_profile,
     render_auth_sidebar,
@@ -74,6 +77,73 @@ def _render_tree_node(node: dict, indent: int = 0) -> None:
         st.markdown(f"{prefix}📄 `{node.get('relative_path', name)}` ({size} B)")
 
 
+def _download_asset(project_id: int, relative_path: str) -> tuple[bytes | None, str | None]:
+    rel = (relative_path or "").strip().lstrip("/")
+    if not rel:
+        return None, "路径无效"
+    try:
+        resp = httpx.get(
+            f"{api_base_url()}/project/{project_id}/download",
+            params={"relative_path": rel},
+            headers=auth_headers(),
+            timeout=120.0,
+        )
+        if resp.status_code != 200:
+            detail = resp.json().get("detail", resp.text[:200]) if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:200]
+            return None, str(detail)
+        filename = rel.split("/")[-1] or "download.bin"
+        return resp.content, filename
+    except Exception as e:
+        return None, str(e)
+
+
+def _render_asset_rows(
+    assets: list,
+    project_id: int,
+    allow_download: bool,
+    allow_delete: bool,
+    is_archived: bool,
+    section_key: str,
+) -> None:
+    for idx, asset in enumerate(assets):
+        rel = str(asset.get("relative_path") or "")
+        name = str(asset.get("original_filename") or rel.split("/")[-1] or rel)
+        cols = st.columns([4, 1, 1])
+        cols[0].markdown(f"`{rel}` · {name}")
+        prep_key = f"asset_dl_{section_key}_{project_id}_{idx}"
+        if allow_download:
+            if cols[1].button("下载", key=f"btn_{prep_key}"):
+                content, filename_or_err = _download_asset(project_id, rel)
+                if content is None:
+                    st.session_state[prep_key] = {"error": filename_or_err or "下载失败"}
+                else:
+                    st.session_state[prep_key] = {
+                        "content": content,
+                        "filename": filename_or_err or "download.bin",
+                    }
+            cached = st.session_state.get(prep_key) or {}
+            if cached.get("content"):
+                cols[1].download_button(
+                    "保存文件",
+                    data=cached["content"],
+                    file_name=cached.get("filename") or "download.bin",
+                    key=f"save_{prep_key}",
+                )
+            elif cached.get("error"):
+                cols[1].caption(str(cached["error"])[:40])
+        if allow_delete and not is_archived:
+            if cols[2].button("删除", key=f"del_{section_key}_{project_id}_{idx}"):
+                resp = api_delete(
+                    f"/project/{project_id}/assets",
+                    json_body={"relative_path": rel},
+                )
+                if "error" in resp:
+                    st.error(resp["error"])
+                else:
+                    st.success("已删除")
+                    st.rerun()
+
+
 def render_project_lifecycle(api_base: str = API_BASE) -> None:
     if not is_logged_in():
         st.warning("请先登录后再管理项目。")
@@ -95,9 +165,8 @@ def render_project_lifecycle(api_base: str = API_BASE) -> None:
     refresh_user_profile()
     allow_upload = can_upload(project_id)
     allow_manage = can_manage_project(project_id)
-
-    st.subheader("项目工作区")
-    st.caption(f"当前项目：**{project_name}** · ID `{project_id}`")
+    allow_download = can_download(project_id)
+    allow_delete_asset = can_delete(project_id)
 
     detail = api_get(f"/project/{project_id}")
     if "error" in detail:
@@ -106,6 +175,15 @@ def render_project_lifecycle(api_base: str = API_BASE) -> None:
     info = detail.get("data") or {}
     status = str(info.get("status") or "active")
     is_archived = status == "archived"
+
+    st.subheader("项目工作区")
+    shared_tag = " · [共享项目]" if info.get("is_shared") else ""
+    st.caption(f"当前项目：**{project_name}** · ID `{project_id}`{shared_tag}")
+
+    with st.container(border=True):
+        st.markdown("**我的项目权限**")
+        st.caption(f"访问类型：`{info.get('access', '—')}`")
+        st.caption(f"权限：{format_permission_labels(info.get('permissions'))}")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("状态", "已归档" if is_archived else "活跃")
@@ -138,6 +216,10 @@ def render_project_lifecycle(api_base: str = API_BASE) -> None:
                 st.error(r.json().get("detail", r.text[:200]))
 
     st.markdown("#### 数据接入（raw/）")
+    st.caption(
+        "raw/ 用于预置项目级原始数据，**不会自动进入分析链路**。"
+        "分析前请创建会话，将文件复制到会话工作区或直接上传到会话。"
+    )
     if is_archived:
         st.warning("项目已归档，无法上传。")
     elif not allow_upload:
@@ -157,10 +239,33 @@ def render_project_lifecycle(api_base: str = API_BASE) -> None:
                 timeout=120.0,
             )
             if resp.status_code == 200:
-                st.success(f"已写入 `{resp.json().get('relative_path', '')}`")
+                body = resp.json()
+                notice = body.get("notice") or ""
+                st.success(f"已写入 `{body.get('relative_path', '')}`")
+                if notice:
+                    st.info(notice)
                 st.rerun()
             else:
                 st.error(resp.json().get("detail", resp.text[:200]))
+
+    sid = str(st.session_state.get("session_id") or "").strip()
+    if sid and not is_archived and allow_upload:
+        st.markdown("#### 复制 raw/ 到当前会话")
+        st.caption(f"当前会话 `{sid}`：将项目 raw/ 下全部文件复制到会话工作区以供分析。")
+        if st.button("复制 raw/ → 会话工作区", key="btn_copy_raw_to_session"):
+            r = api_post(
+                "/session/copy-from-project-raw",
+                {"session_id": sid},
+                timeout=120.0,
+            )
+            if "error" in r:
+                st.error(r["error"])
+            else:
+                copied = ((r.get("data") or {}).get("copied")) or []
+                st.success(f"已复制 {len(copied)} 个文件到会话工作区")
+                st.rerun()
+    elif not sid:
+        st.caption("在侧栏选择或创建会话后，可将 raw/ 文件复制到会话工作区。")
 
     st.markdown("#### 项目资产")
     assets_resp = api_get(f"/project/{project_id}/assets")
@@ -171,26 +276,30 @@ def render_project_lifecycle(api_base: str = API_BASE) -> None:
             outputs = [a for a in assets if a.get("asset_type") == "analysis_output"]
             if uploads:
                 st.markdown("**上传 (upload)**")
-                st.dataframe(
-                    pd.DataFrame(uploads)[
-                        ["relative_path", "original_filename", "file_category", "created_at"]
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
+                _render_asset_rows(
+                    uploads,
+                    project_id,
+                    allow_download,
+                    allow_delete_asset,
+                    is_archived,
+                    "upload",
                 )
             if outputs:
                 st.markdown("**分析产出 (analysis_output)**")
-                st.dataframe(
-                    pd.DataFrame(outputs)[
-                        ["relative_path", "original_filename", "session_id", "created_at"]
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
+                _render_asset_rows(
+                    outputs,
+                    project_id,
+                    allow_download,
+                    allow_delete_asset,
+                    is_archived,
+                    "output",
                 )
             if not uploads and not outputs:
                 st.info("暂无资产记录。")
         else:
             st.info("暂无资产记录。")
+    if not allow_download and not allow_delete_asset:
+        st.caption("当前账号无资产下载或删除权限。")
 
     st.markdown("#### 目录树")
     tree_resp = api_get(f"/project/{project_id}/tree")
