@@ -15,7 +15,7 @@ if "utils.mysql_utils" not in sys.modules:
     sys.modules["utils.mysql_utils"] = _mysql_mod
 
 from backend.jwt_auth import create_access_token, decode_access_token
-from backend.session_auth import assert_session_owner
+from backend.project_auth import assert_session_access
 from configs.config import JWT_ALGORITHM
 
 
@@ -50,7 +50,7 @@ def test_decode_expired_token_raises():
 def test_assert_session_owner_success():
     session_row = {"session_id": "sid-1", "user_id": 10, "workspace_abs_path": "/tmp/ws"}
     with patch("db.session_store.SessionStore.get_session_user", return_value=(session_row, None)):
-        result = assert_session_owner("sid-1", 10)
+        result = assert_session_access("sid-1", 10)
     assert result["session_id"] == "sid-1"
 
 
@@ -65,12 +65,12 @@ def test_assert_session_owner_forbidden():
             ),
         ):
             with pytest.raises(HTTPException) as exc:
-                assert_session_owner("sid-1", 99)
+                assert_session_access("sid-1", 99)
     assert exc.value.status_code == 403
 
 
 def test_assert_session_owner_not_found():
     with patch("db.session_store.SessionStore.get_session_user", return_value=(None, None)):
         with pytest.raises(HTTPException) as exc:
-            assert_session_owner("missing", 1)
+            assert_session_access("missing", 1)
     assert exc.value.status_code == 404

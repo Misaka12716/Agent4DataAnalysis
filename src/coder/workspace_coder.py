@@ -9,11 +9,19 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_CODER_MODEL
+from configs.config import (
+    OPENAI_COMPATIBLE_API_BASE,
+    API_KEY,
+    DEFAULT_CODER_MODEL,
+    LLM_REQUEST_TIMEOUT,
+)
 from configs.prompts import get_coder_system_prompt, get_user_prompt
 from utils.workspace_file_ops import create_python_file, read_file
 from utils.model_logger import log_milestone, log_model_event, log_phase_end, log_phase_start
 from utils.session_memory import format_memory_for_prompt, read_session_memory_for_prompt
+
+# 与 Reader digest 量级对齐，防止 files_detail JSON 撑爆 Coder prompt。
+_MAX_FILES_DETAIL_CHARS = 12000
 
 
 def _escape_langchain_system_braces(text: str) -> str:
@@ -30,12 +38,22 @@ def _format_workspace_files_info(workspace_context: Optional[Dict[str, Any]], la
     """
     if not workspace_context:
         return "" if lang == "zh" else ""
-    file_list = workspace_context.get("file_list") or []
+    skip = {"SESSION_MEMORY.md"}
+    file_list = [
+        n for n in (workspace_context.get("file_list") or [])
+        if (n.split("/")[-1] if isinstance(n, str) else n) not in skip
+    ]
     digest = workspace_context.get("workspace_digest") or {}
     excel_schema = workspace_context.get("excel_schema") or {}
     files_detail = digest.get("files") if digest else {}
     if not files_detail:
         files_detail = excel_schema.get("files") or {}
+    if isinstance(files_detail, dict):
+        files_detail = {
+            k: v
+            for k, v in files_detail.items()
+            if (str(k).split("/")[-1] not in skip)
+        }
     lines = []
     if lang == "zh":
         lines.append("## 工作区根目录下的文件与数据格式（必须使用以下真实路径与格式，禁止编造假数据或假路径）")
@@ -47,7 +65,10 @@ def _format_workspace_files_info(workspace_context: Optional[Dict[str, Any]], la
             lines.append(
                 "各数据文件的结构、样本行、read_hint 及图片/文本摘要如下（表格请按 read_hint 读取）："
             )
-            lines.append(json.dumps(files_detail, ensure_ascii=False, default=str, indent=2))
+            detail_json = json.dumps(files_detail, ensure_ascii=False, default=str, indent=2)
+            if len(detail_json) > _MAX_FILES_DETAIL_CHARS:
+                detail_json = detail_json[: _MAX_FILES_DETAIL_CHARS - 20] + "\n…（已截断）"
+            lines.append(detail_json)
     else:
         lines.append("## Workspace files and data format (you must use these real paths and formats; do not fabricate paths or data)")
         lines.append("File list in workspace root (relative paths):")
@@ -58,7 +79,10 @@ def _format_workspace_files_info(workspace_context: Optional[Dict[str, Any]], la
             lines.append(
                 "Per-file schemas, sample rows, read_hint, and image/text digests (use read_hint for tables):"
             )
-            lines.append(json.dumps(files_detail, ensure_ascii=False, default=str, indent=2))
+            detail_json = json.dumps(files_detail, ensure_ascii=False, default=str, indent=2)
+            if len(detail_json) > _MAX_FILES_DETAIL_CHARS:
+                detail_json = detail_json[: _MAX_FILES_DETAIL_CHARS - 20] + "\n...(truncated)"
+            lines.append(detail_json)
     return "\n".join(lines)
 
 
@@ -118,6 +142,7 @@ def _generate_code_for_task(
         temperature=0.1,
         api_key=API_KEY,
         base_url=OPENAI_COMPATIBLE_API_BASE,
+        timeout=LLM_REQUEST_TIMEOUT,
     )
     chain = prompt | llm | StrOutputParser()
     payload = {"user_body": user_body}
@@ -191,6 +216,7 @@ def correct_and_write_code(
         temperature=0.1,
         api_key=API_KEY,
         base_url=OPENAI_COMPATIBLE_API_BASE,
+        timeout=LLM_REQUEST_TIMEOUT,
     )
     chain = prompt | llm | StrOutputParser()
     payload = {"user_body": user_body}

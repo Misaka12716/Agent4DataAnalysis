@@ -16,7 +16,8 @@ from backend.project_auth import (
 from db.rbac_schema import PERM_DATA_UPLOAD
 from backend.project_models import ProjectCreateRequest, ProjectUpdateRequest
 from reader.file_types import classify_file, is_upload_allowed, upload_allowed_extensions
-from utils.workspace_manager import generate_data_filename, resolve_project_root
+from utils.upload_naming import allocate_unique_name_in_dir, original_basename
+from utils.workspace_manager import resolve_project_root
 
 MAX_FILE_SIZE = 2048 * 1024 * 1024
 
@@ -162,7 +163,9 @@ def register_project_routes(app) -> None:
         project_root = resolve_project_root(project_id) or str(project.get("workspace_abs_path") or "")
         raw_dir = os.path.join(project_root, "raw")
         os.makedirs(raw_dir, exist_ok=True)
-        safe_name = generate_data_filename(raw_dir, original_filename)
+        client_original = original_basename(original_filename)
+        allocated = allocate_unique_name_in_dir(raw_dir, client_original)
+        safe_name = allocated.stored_name
         dest_path = os.path.join(raw_dir, safe_name)
 
         try:
@@ -180,7 +183,7 @@ def register_project_routes(app) -> None:
             project_id=project_id,
             session_id=None,
             relative_path=relative_path,
-            original_filename=original_filename,
+            original_filename=client_original,
             file_category=file_category,
         )
 
@@ -192,7 +195,8 @@ def register_project_routes(app) -> None:
                 "notice": "项目 raw/ 上传不会自动进入分析链路；请创建会话后使用 POST /session/copy-from-project-raw 或直接 POST /session/upload-excel 上传到会话工作区。",
                 "project_id": project_id,
                 "relative_path": relative_path,
-                "original_filename": original_filename,
+                "original_filename": client_original,
+                "renamed": allocated.renamed,
                 "file_category": file_category,
             },
             status_code=200,

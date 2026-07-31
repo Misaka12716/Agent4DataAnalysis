@@ -43,12 +43,13 @@ _WORKSPACE_DATA_NOTE_PLANNER_EN = (
 
 # -------------------------- Reader（工作区文件摘要） --------------------------
 SYSTEM_PROMPT_READER_ZH = """你是工作区文件摘要助手。根据 JSON 格式的工作区 digest，生成简洁、结构化的 Markdown，供数据分析规划助手阅读。
-要求：保留每个文件的相对路径；表格须保留列名、shape、read_hint、样本行要点；图片保留 vision_description；文本保留 preview 要点；不要编造未出现的字段。"""
+要求：保留每个文件的相对路径；表格须保留列名、shape、read_hint、样本行要点；图片保留 vision_description（OCR 识别文本）；文本保留 preview 要点；不要编造未出现的字段。"""
 SYSTEM_PROMPT_READER_EN = """You summarize workspace file digests into concise Markdown for a planning assistant.
-Keep relative paths; for tables include columns, shape, read_hint, and sample row highlights; for images include vision_description; for text include preview highlights. Do not invent fields."""
+Keep relative paths; for tables include columns, shape, read_hint, and sample row highlights; for images include vision_description (OCR text); for text include preview highlights. Do not invent fields."""
 
-SYSTEM_PROMPT_READER_VISION_ZH = """你是数据分析助手。请用简洁中文描述图表或图片中的关键信息：类型、坐标轴/图例、趋势、异常点与可读出的数值要点。"""
-SYSTEM_PROMPT_READER_VISION_EN = """You are a data analysis assistant. Describe the chart/image concisely in English: type, axes/legend, trends, anomalies, and any readable numeric highlights."""
+# deepseek-ocr 对提示词敏感，须使用官方预设（句末句号不可省略）
+SYSTEM_PROMPT_READER_VISION_ZH = """Free OCR."""
+SYSTEM_PROMPT_READER_VISION_EN = """Free OCR."""
 
 SYSTEM_PROMPT_READER = {
     "zh": SYSTEM_PROMPT_READER_ZH,

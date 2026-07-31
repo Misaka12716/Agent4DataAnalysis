@@ -1,0 +1,7 @@
+indicator,lower_bound,upper_bound,gender,diagnosis,age_range_lower,age_range_upper,unit,source
+HAMD_total,0,7,,,18,65,score,无抑郁参考
+HAMD_total,0,16,,depression,18,65,score,抑郁轻度上限
+HAMA_total,0,7,,,18,65,score,无焦虑参考
+HAMA_total,0,14,,anxiety,18,65,score,焦虑轻度上限
+PHQ9_total,0,4,,,18,65,score,PHQ9 无/轻微
+PHQ9_total,0,9,,depression,18,65,score,PHQ9 轻度上限

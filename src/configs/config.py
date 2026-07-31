@@ -1,5 +1,16 @@
 import os
+from pathlib import Path
 from typing import List
+
+# 幂等加载仓库根 .env（override=False：已有进程环境变量优先）
+try:
+    from dotenv import load_dotenv
+
+    _root_env = Path(__file__).resolve().parents[2] / ".env"
+    if _root_env.is_file():
+        load_dotenv(_root_env, override=False)
+except ImportError:
+    pass
 
 # --------------------------
 # 通用路径配置
@@ -9,25 +20,35 @@ TEMP_FOLDER = "/data1/pjw/AgentPlatform/tmp/"  # 临时文件存储路径
 UPLOAD_FOLDER = os.path.join(TEMP_FOLDER, "uploads/")  # 上传文件存储路径
 DOWNLOAD_FOLDER = os.path.join(TEMP_FOLDER, "downloads/")  # 下载文件存储路径
 
+# 个人资源管理（文件空间 / 数据集 / 模型库）
+RESOURCES_ROOT = os.getenv("RESOURCES_ROOT", os.path.join(TEMP_FOLDER, "resources"))
+RESOURCES_MAX_UPLOAD_MB = int(os.getenv("RESOURCES_MAX_UPLOAD_MB", "2048"))
+RESOURCES_PREVIEW_ROWS = int(os.getenv("RESOURCES_PREVIEW_ROWS", "50"))
+RESOURCES_PREDICT_MAX_ROWS = int(os.getenv("RESOURCES_PREDICT_MAX_ROWS", "5000"))
+
 # --------------------------
 # 模型相关配置（部署与分工见 docs/Models.md）
 # --------------------------
-GENERAL_MODEL = "qwen3.6:27b"  # 通用 / 多模态
+GENERAL_MODEL = "glm-4.7-flash:q4_K_M"  # 通用文本默认
 CODER_MODEL = "qwen3-coder:30b"  # Coder 专用
+VISION_MODEL = "deepseek-ocr:latest"  # OCR / 图片文字识别
 
 SUPPORTED_MODELS: List[str] = [
+    GENERAL_MODEL ,
     CODER_MODEL,
-    GENERAL_MODEL,
+    VISION_MODEL,
     "qwen2.5:14b",
     "qwen2.5:7b",
 ]
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", GENERAL_MODEL)
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", GENERAL_MODEL)   # glm-4.7-flash:q4_K_M
 DEFAULT_CODER_MODEL = os.getenv("DEFAULT_CODER_MODEL", CODER_MODEL)
 # 顶层编排 Supervisor 路由模型（可与主模型相同）
 DEFAULT_ORCHESTRATOR_MODEL = os.getenv("DEFAULT_ORCHESTRATOR_MODEL", DEFAULT_MODEL)
 # Reader 智能体：文件摘要与可选 Vision
 DEFAULT_READER_MODEL = os.getenv("DEFAULT_READER_MODEL", DEFAULT_MODEL)
-DEFAULT_VISION_MODEL = os.getenv("DEFAULT_VISION_MODEL", GENERAL_MODEL)
+DEFAULT_VISION_MODEL = os.getenv("DEFAULT_VISION_MODEL", VISION_MODEL)
+# 临床报告润色（默认与通用文本相同）
+CLINICAL_REPORT_MODEL = os.getenv("CLINICAL_REPORT_MODEL", DEFAULT_MODEL)
 READER_TABLE_SAMPLE_ROWS = int(os.getenv("READER_TABLE_SAMPLE_ROWS", "5"))
 READER_TEXT_PREVIEW_CHARS = int(os.getenv("READER_TEXT_PREVIEW_CHARS", "4000"))
 READER_ENABLE_LLM_TABLE_HEADER = os.getenv("READER_ENABLE_LLM_TABLE_HEADER", "0") == "1"
@@ -35,6 +56,8 @@ READER_ENABLE_LLM_TABLE_HEADER = os.getenv("READER_ENABLE_LLM_TABLE_HEADER", "0"
 MAX_SUPERVISOR_INVOCATIONS = int(os.getenv("MAX_SUPERVISOR_INVOCATIONS", "24"))
 MAX_CODER_CORRECTIONS = int(os.getenv("MAX_CODER_CORRECTIONS", "5"))
 MAX_PLANNER_RETRIES = int(os.getenv("MAX_PLANNER_RETRIES", "4"))
+# 单次 LLM HTTP 请求超时（秒）；防止 Coder/Supervisor 同步调用永久挂起
+LLM_REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "180"))
 LANGUAGE = "zh"  # 使用的语言(zn/en)
 
 # 会话记忆 SESSION_MEMORY.md（工作区内 Markdown，供各智能体提示词引用）
@@ -69,24 +92,22 @@ JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "168"))
 
 # --------------------------
-# API 相关配置
+# API 相关配置（主键：OPENAI_API_*；旧名 API_KEY / OPENAI_COMPATIBLE_API_BASE 为兼容别名）
 # --------------------------
-OPENAI_COMPATIBLE_API_BASE = "http://192.168.4.110:12716/v1"  # 兼容OpenAI的API基础地址
-API_KEY = ""  # API访问密钥（为空时可能表示无需密钥）
-WORKFLOW_API_BASE = "162.105.89.4/workflow/api/"  # 工作流API基础地址
+API_KEY = os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+OPENAI_COMPATIBLE_API_BASE = (
+    os.getenv("OPENAI_COMPATIBLE_API_BASE")
+    or os.getenv("OPENAI_API_BASE")
+    or "http://192.168.4.110:12716/v1"
+)
+WORKFLOW_API_BASE = os.getenv("WORKFLOW_API_BASE", "162.105.89.4/workflow/api/")
 
 # --------------------------
-# MYSQL连接配置（核心参数）
+# MYSQL连接配置（权威来源：仓库根 .env 的 MYSQL_*）
 # --------------------------
-# MYSQL主机地址（优先从环境变量读取，默认localhost）
 MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
-# 数据库用户名（默认root）
-MYSQL_USER = "root"
-# 数据库密码
-MYSQL_PASSWORD = "AgentPlatform2026!"
-# 数据库名称
-MYSQL_DB = "agent_platform"
-# 数据库端口
-MYSQL_PORT = 3308
-# 字符编码（支持emoji）
-MYSQL_CHARSET = "utf8mb4"
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DB = os.getenv("MYSQL_DB", "agent_platform")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3308"))
+MYSQL_CHARSET = os.getenv("MYSQL_CHARSET", "utf8mb4")

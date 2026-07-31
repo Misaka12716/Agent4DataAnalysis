@@ -134,7 +134,7 @@ data: <json-string>
 }
 ```
 
-用途：返回 Python 执行结果（经 `runtime.commands.run`）。默认本地 Runtime 下由 **`RUNNER_PYTHON`**（如 `agentPlatform-runner`）执行，与 FastAPI 主环境隔离；`CUBE_SANDBOX_ENABLED=1` 时走 Cube 沙箱内 Python。供前端展示和后续编排判断。
+用途：返回 Python 执行结果（经 `runtime.commands.run`）。默认本地 Runtime 下由 **`RUNNER_PYTHON`**（`.env` 配置的解释器，依赖见 `requirements-runner.txt`）执行，与 FastAPI 主环境隔离；`CUBE_SANDBOX_ENABLED=1` 时走 Cube 沙箱内 Python。供前端展示和后续编排判断。
 
 ### 4.5 report_chunk
 

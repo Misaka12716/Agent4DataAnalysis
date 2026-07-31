@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -28,6 +29,78 @@ class SupervisorDecision(BaseModel):
 
 
 PipelineState = Dict[str, Any]
+
+_ANALYZABLE_FILE_TYPES = frozenset({"table", "image", "document", "imaging"})
+_ANALYZABLE_EXTENSIONS = frozenset(
+    {
+        ".xlsx",
+        ".xls",
+        ".csv",
+        ".tsv",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".bmp",
+        ".pdf",
+        ".docx",
+        ".dcm",
+        ".dicom",
+    }
+)
+
+NO_ANALYZABLE_DATA_MSG_ZH = (
+    "工作区无可分析数据；本平台面向数据分析，请上传表格/文档/影像等后再试。"
+)
+NO_ANALYZABLE_DATA_MSG_EN = (
+    "No analyzable data in the workspace; this platform targets data analysis. "
+    "Please upload tables/documents/imaging files and retry."
+)
+
+
+def has_analyzable_workspace(workspace_context: Optional[Dict[str, Any]]) -> bool:
+    """
+    判断工作区是否存在可供分析的数据文件（表格/图片/文档/医学影像）。
+    仅有 SESSION_MEMORY.md / main.py / 空目录视为无可分析数据。
+    """
+    if not workspace_context:
+        return False
+    digest = workspace_context.get("workspace_digest") or {}
+    files = digest.get("files") if isinstance(digest, dict) else None
+    if isinstance(files, dict):
+        for info in files.values():
+            if not isinstance(info, dict):
+                continue
+            ft = (info.get("file_type") or "").strip().lower()
+            if ft in _ANALYZABLE_FILE_TYPES:
+                return True
+            rel = str(info.get("relative_path") or "")
+            if os.path.splitext(rel)[1].lower() in _ANALYZABLE_EXTENSIONS:
+                return True
+    for name in workspace_context.get("file_list") or []:
+        base = str(name).split("/")[-1]
+        if base in {"SESSION_MEMORY.md", "main.py"}:
+            continue
+        if os.path.splitext(base)[1].lower() in _ANALYZABLE_EXTENSIONS:
+            return True
+    return False
+
+
+def placeholder_worker_results_no_data(lang: str = "zh") -> Dict[str, Any]:
+    """无分析数据时注入占位 Worker 结果，满足 reporter 前置钳制。"""
+    msg = (
+        NO_ANALYZABLE_DATA_MSG_EN
+        if (lang or "").strip().lower() == "en"
+        else NO_ANALYZABLE_DATA_MSG_ZH
+    )
+    return {
+        "success": False,
+        "results": [],
+        "logs": "",
+        "error_messages": [msg],
+        "skipped_no_analyzable_data": True,
+    }
 
 
 def plan_is_valid(plan_data: Optional[Dict[str, Any]]) -> bool:
@@ -82,6 +155,7 @@ def clamp_route(state: PipelineState, decision: SupervisorDecision) -> tuple[str
     sup_ct = int(state.get("supervisor_invoke_count") or 0)
     last = (state.get("last_completed_stage") or "").strip()
     corr = int(state.get("correction_attempts") or 0)
+    no_data = not has_analyzable_workspace(state.get("workspace_context"))
 
     if force_rep and raw not in ("reporter", "finish"):
         raw = "reporter"
@@ -95,21 +169,29 @@ def clamp_route(state: PipelineState, decision: SupervisorDecision) -> tuple[str
             raw = "planner"
             extra = "（规划无效，不能结束）"
         elif not rep_done and plan_ok and not code_ok:
-            raw = "coder"
-            extra = "（尚无成功代码，不能结束）"
+            if no_data:
+                raw = "reporter"
+                extra = "（无可分析数据，改为 reporter）"
+            else:
+                raw = "coder"
+                extra = "（尚无成功代码，不能结束）"
         elif not rep_done and plan_ok and code_ok and wr is None:
-            raw = "worker"
-            extra = "（尚未执行，不能结束）"
+            if no_data:
+                raw = "reporter"
+                extra = "（无可分析数据，改为 reporter）"
+            else:
+                raw = "worker"
+                extra = "（尚未执行，不能结束）"
 
     if not plan_ok and raw in ("coder", "worker", "reporter"):
         raw = "planner"
         extra = "（无有效规划，改为 planner）"
 
-    if plan_ok and raw == "worker" and not code_ok:
+    if plan_ok and raw == "worker" and not code_ok and not no_data:
         raw = "coder"
         extra = "（尚无成功写入的代码，改为 coder）"
 
-    if plan_ok and raw == "reporter" and wr is None:
+    if plan_ok and raw == "reporter" and wr is None and not no_data:
         raw = "worker" if code_ok else "coder"
         extra = "（尚未执行 worker，已钳制）"
 
@@ -123,7 +205,10 @@ def clamp_route(state: PipelineState, decision: SupervisorDecision) -> tuple[str
             extra = "（Supervisor 次数上限，强制 reporter）"
 
     if raw == "planner" and int(state.get("planner_run_count") or 0) >= MAX_PLANNER_RETRIES and plan_ok:
-        if not code_ok:
+        if no_data:
+            raw = "reporter"
+            extra = "（Planner 重试次数上限且无可分析数据，改为 reporter）"
+        elif not code_ok:
             raw = "coder"
             extra = "（Planner 重试次数上限，改为 coder）"
         elif wr is None:
@@ -133,7 +218,7 @@ def clamp_route(state: PipelineState, decision: SupervisorDecision) -> tuple[str
             raw = "reporter"
             extra = "（Planner 重试次数上限，改为 reporter）"
 
-    if plan_ok and code_ok and last == "coder" and raw == "coder":
+    if plan_ok and code_ok and last == "coder" and raw == "coder" and not no_data:
         raw = "worker"
         extra = "（代码已写入/修正，改为 worker 执行）"
 
@@ -144,9 +229,15 @@ def clamp_route(state: PipelineState, decision: SupervisorDecision) -> tuple[str
         and wr is not None
         and not wr.get("success", False)
         and raw == "coder"
+        and not no_data
     ):
         raw = "worker"
         extra = "（已达 Coder 修正上限，改为 worker 重跑）"
+
+    # 终态守卫：无可分析数据时禁止硬走 coder/worker
+    if plan_ok and no_data and not rep_done and raw in ("coder", "worker"):
+        raw = "reporter"
+        extra = "（工作区无可分析数据，跳过代码生成/执行，直接生成说明性报告）"
 
     if extra:
         reason = f"{reason} {extra}".strip()
@@ -162,6 +253,7 @@ def supervisor_allowed_hint(state: PipelineState) -> str:
     rep_done = bool(state.get("reporter_done"))
     wfail = wr is not None and not wr.get("success", False)
     lang = (state.get("lang") or "zh").strip().lower()
+    no_data = not has_analyzable_workspace(state.get("workspace_context"))
     role_line = (
         "Role split: Coder stdout = verifiable stats/facts only; Reporter writes narrative conclusions and recommendations from logs—avoid duplication."
         if lang == "en"
@@ -172,9 +264,16 @@ def supervisor_allowed_hint(state: PipelineState) -> str:
         f"last_completed_stage={last or '(无)'}",
         f"plan_ok={plan_ok} code_ok={code_ok} worker_ran={wr is not None} worker_success={wr.get('success') if wr else None}",
         f"reporter_done={rep_done} correction_attempts={state.get('correction_attempts', 0)}",
+        f"has_analyzable_data={not no_data}",
         role_line,
     ]
-    if last == "coder" and code_ok:
+    if no_data and plan_ok and not rep_done:
+        lines.append(
+            "No analyzable data files: choose reporter (explain that user must upload tables/documents); do not choose coder/worker."
+            if lang == "en"
+            else "工作区无可分析数据：应选择 reporter 说明需上传表格/文档等；勿选择 coder/worker。"
+        )
+    if last == "coder" and code_ok and not no_data:
         lines.append("代码已写入/修正：应选择 worker 重新执行（勿再次进入 coder）。")
     elif wfail:
         corr = int(state.get("correction_attempts") or 0)
@@ -188,7 +287,7 @@ def supervisor_allowed_hint(state: PipelineState) -> str:
             )
     if not plan_ok:
         lines.append("当前无有效规划：应选择 planner。")
-    elif last == "planner" and plan_ok:
+    elif last == "planner" and plan_ok and not no_data:
         lines.append("规划刚完成：通常应选择 coder。")
     elif last == "worker" and wr and wr.get("success"):
         lines.append("执行成功：通常应选择 reporter。")

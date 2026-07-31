@@ -45,6 +45,9 @@ echo "[init-platform] 工作目录: ${ROOT}"
 echo "[init-platform] 生成 fixtures 并导入模板..."
 python "${SEED_SCRIPT}" ${ACCEPTANCE_FLAG}
 
+echo "[init-platform] 导入 2.1.6 临床演示数据..."
+python "${ROOT}/scripts/seed_216.py"
+
 echo "[init-platform] 归属历史会话并确保个人默认项目..."
 python "${ROOT}/scripts/bootstrap-projects.py"
 

@@ -477,6 +477,7 @@ elif not session_id.strip():
     st.session_state["_synced_session_id"] = ""
 
 from frontend.pages.admin_users import render_admin_users_page
+from frontend.pages.clinical_support import render_clinical_support_page
 from frontend.pages.project_members import render_project_members_page
 from frontend.pages.streaming_analysis import render_streaming_analysis_page
 from frontend.pages.template_analysis import render_template_analysis_page
@@ -489,6 +490,7 @@ _nav_pages = [
         default=True,
     ),
     st.Page(render_template_analysis_page, title="模板分析", icon="📋"),
+    st.Page(render_clinical_support_page, title="临床支持", icon="🏥"),
     st.Page(render_project_members_page, title="项目成员", icon="👥"),
 ]
 if str(st.session_state.get("platform_role") or "") == "admin":

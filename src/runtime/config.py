@@ -13,7 +13,9 @@ def is_sandbox_backend_enabled() -> bool:
 def get_runner_python() -> str:
     """
     Worker 代码执行使用的 Python 解释器（独立于 FastAPI/LangGraph 主环境）。
-    生产环境应设置 RUNNER_PYTHON 指向 agentPlatform-runner 环境的 python。
+
+    应指向专用 conda 环境 ``agentPlatform-runner``（已装 ``requirements-runner.txt``）。
+    conda ``base`` 为根环境、不可改名，勿当作专用 Runner。
     """
     if RUNNER_PYTHON:
         return RUNNER_PYTHON

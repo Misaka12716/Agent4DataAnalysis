@@ -1,5 +1,7 @@
 import json
+import logging
 import os
+import threading
 import uuid
 from datetime import datetime
 from typing import Optional, List
@@ -23,9 +25,9 @@ from backend.project_auth import (
 from db.rbac_schema import PERM_ANALYSIS_CREATE, PERM_DATA_UPLOAD
 from backend.project_asset_registry import register_upload, relative_path_for_project_asset
 from db.session_store import SessionStore
+from utils.upload_naming import allocate_unique_name_in_dir, original_basename
 from utils.workspace_manager import (
     init_workspace,
-    generate_data_filename,
     build_workspace_tree,
     build_workspace_files_payload,
     resolve_project_root,
@@ -35,7 +37,39 @@ from utils.session_memory import persist_workspace_snapshot
 from runtime.factory import ensure_runtime
 from configs.config import LANGUAGE
 
+logger = logging.getLogger(__name__)
+
 MAX_FILE_SIZE = 2048 * 1024 * 1024  # 最大文件大小（2048M，与Nginx配置一致）
+
+
+def _schedule_workspace_snapshot(
+    session_id: str,
+    *,
+    lang: str = "zh",
+    note: str = "",
+    input_hint: str = "",
+) -> None:
+    """后台刷新会话工作区快照（含 Reader/OCR），不阻塞上传等 HTTP 响应。"""
+
+    def _worker() -> None:
+        try:
+            persist_workspace_snapshot(
+                session_id,
+                lang=lang,
+                note=note,
+                input_hint=input_hint,
+            )
+        except Exception:
+            logger.exception(
+                "background persist_workspace_snapshot failed: session_id=%s",
+                session_id,
+            )
+
+    threading.Thread(
+        target=_worker,
+        name=f"workspace-snapshot-{session_id[:8]}",
+        daemon=True,
+    ).start()
 
 
 def build_health_response() -> JSONResponse:
@@ -55,7 +89,7 @@ async def handle_session_upload_excel(
     current_user_id: int,
 ) -> JSONResponse:
     """
-    上传文件到会话工作区（表格 / 图片 / 文本，与 Reader 分类一致）。
+    上传文件到会话工作区（表格 / 图片 / 文本 / 文档 / 影像，与 FormatRegistry 一致）。
     要求 session_id 已存在于 session_user 映射表。
     """
     if not session_id.strip():
@@ -88,8 +122,10 @@ async def handle_session_upload_excel(
     if not workspace_abs:
         workspace_abs = init_workspace(int(session_user.get("user_id") or current_user_id), session_id)
     os.makedirs(workspace_abs, exist_ok=True)
-    # 统一数据文件命名：data.xxx / data_1.xxx / data_2.xxx ...
-    safe_name = generate_data_filename(workspace_abs, file.filename or "")
+    # 无冲突保留原名；冲突时原名 (N).ext
+    allocated = allocate_unique_name_in_dir(workspace_abs, original_filename)
+    safe_name = allocated.stored_name
+    client_original = original_basename(original_filename)
     try:
         chunks: list[bytes] = []
         while chunk := await file.read(1024 * 1024):
@@ -102,15 +138,12 @@ async def handle_session_upload_excel(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"保存文件失败: {e}")
 
-    try:
-        persist_workspace_snapshot(
-            session_id,
-            lang=LANGUAGE,
-            note=f"已上传文件到工作区：`{safe_name}`（类型: {classify_file(safe_name)}）。",
-            input_hint="（上传后尚未发起新一轮分析时可参考下列文件列表）",
-        )
-    except Exception:
-        pass
+    _schedule_workspace_snapshot(
+        session_id,
+        lang=LANGUAGE,
+        note=f"已上传文件到工作区：`{safe_name}`（类型: {classify_file(safe_name)}）。",
+        input_hint="（上传后尚未发起新一轮分析时可参考下列文件列表）",
+    )
 
     project_id = session_user.get("project_id")
     if project_id:
@@ -127,7 +160,7 @@ async def handle_session_upload_excel(
                     project_id=int(project_id),
                     session_id=session_id,
                     relative_path=rel,
-                    original_filename=original_filename,
+                    original_filename=client_original,
                     file_category=classify_file(safe_name),
                 )
         except Exception:
@@ -139,7 +172,8 @@ async def handle_session_upload_excel(
             "message": "文件已写入会话工作区根目录",
             "session_id": session_id,
             "relative_path": safe_name,
-            "original_filename": original_filename,
+            "original_filename": client_original,
+            "renamed": allocated.renamed,
             "file_category": classify_file(safe_name),
             "workspace_abs_path": workspace_abs,
         },
@@ -251,15 +285,12 @@ def build_create_session_response(user_id: int, project_id: Optional[int] = None
 
     ensure_runtime(session_id)
 
-    try:
-        persist_workspace_snapshot(
-            session_id,
-            lang=LANGUAGE,
-            note="会话已创建，工作区已初始化。",
-            input_hint="（尚未发起分析）",
-        )
-    except Exception:
-        pass
+    _schedule_workspace_snapshot(
+        session_id,
+        lang=LANGUAGE,
+        note="会话已创建，工作区已初始化。",
+        input_hint="（尚未发起分析）",
+    )
 
     return JSONResponse(
         content={
@@ -494,9 +525,20 @@ def build_copy_project_raw_to_session_response(
         raise HTTPException(status_code=404, detail="raw/ 下没有可复制的文件")
 
     copied: List[dict] = []
+    from db.project_store import ProjectStore
+
     for rel, src_path in candidates:
         file_name = os.path.basename(src_path)
-        dest_name = generate_data_filename(session_root, file_name)
+        true_original = file_name
+        try:
+            asset, _ = ProjectStore.get_asset_by_path(project_id, rel)
+            if asset and asset.get("original_filename"):
+                true_original = str(asset["original_filename"])
+        except Exception:
+            pass
+
+        allocated = allocate_unique_name_in_dir(session_root, true_original)
+        dest_name = allocated.stored_name
         dest_path = os.path.join(session_root, dest_name)
         try:
             shutil.copy2(src_path, dest_path)
@@ -510,10 +552,17 @@ def build_copy_project_raw_to_session_response(
             project_id=project_id,
             session_id=sid,
             relative_path=asset_rel,
-            original_filename=file_name,
-            file_category=classify_file(file_name),
+            original_filename=true_original,
+            file_category=classify_file(dest_name),
         )
-        copied.append({"source": rel, "relative_path": session_rel})
+        copied.append(
+            {
+                "source": rel,
+                "relative_path": session_rel,
+                "original_filename": true_original,
+                "renamed": allocated.renamed,
+            }
+        )
 
     return JSONResponse(
         content={

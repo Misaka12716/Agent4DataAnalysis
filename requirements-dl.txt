@@ -1,0 +1,3 @@
+# 深度学习可选依赖（模块9）；未安装时 text_cnn / text_transformer 自动回退 sklearn
+torch>=2.0.0
+# torchvision  # 影像扩展时按需启用

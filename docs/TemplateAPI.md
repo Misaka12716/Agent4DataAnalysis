@@ -4,7 +4,7 @@
 >
 > 本文档覆盖 **模板管理 + 模板驱动分析** 接口。
 >
-> **项目管理、RBAC、会话与鉴权** 见 [`FrontendIntegrationGuide.md`](FrontendIntegrationGuide.md)（产品前端主入口）；接口字段细节见 [`BackendAPI.md`](BackendAPI.md) 与 [`AUTH.md`](AUTH.md)。
+> **项目管理、RBAC、会话与鉴权** 见 [`2.1.1FrontendIntegrationGuide.md`](2.1.1FrontendIntegrationGuide.md)（产品前端主入口）；接口字段细节见 [`BackendAPI.md`](BackendAPI.md) 与 [`AUTH.md`](AUTH.md)。
 
 ---
 
@@ -146,14 +146,15 @@ session_id: <上一步拿到的 session_id>
   "status": "success",
   "message": "文件已写入会话工作区根目录",
   "session_id": "xxxx",
-  "relative_path": "data.xlsx",
+  "relative_path": "我的数据.xlsx",
   "original_filename": "我的数据.xlsx",
+  "renamed": false,
   "file_category": "table",
   "workspace_abs_path": "/.../workspace/sessions/xxxx"
 }
 ```
 
-> `POST /analysis/template-run` 会自动在该会话工作区目录里找第一个 `.xlsx/.xls/.csv/.tsv` 文件来分析，**不需要**额外传文件路径（除非你想强制指定，见 §4.3 的 `file_path` 参数）。
+> 无同名冲突时 `relative_path` 与 `original_filename` 一致；冲突时存盘名为 `原名 (1).ext` 等。`POST /analysis/template-run` 会自动在该会话工作区目录里找第一个 `.xlsx/.xls/.csv/.tsv` 文件来分析，**不需要**额外传文件路径（除非你想强制指定，见 §4.3 的 `file_path` 参数）。
 
 ---
 

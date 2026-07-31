@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -66,10 +67,30 @@ def read_session_memory_raw(session_id: str) -> str:
         return ""
 
 
+def _strip_digest_section(text: str) -> str:
+    """
+    剥离「## 4. 数据与 Schema 摘要」段，避免与 file_info / workspace_context 重复注入。
+    按下一节「## N.」或文件尾结束；找不到 §4 则原样返回。
+    """
+    t = text or ""
+    m = re.search(
+        r"^##\s*4\.\s*[^\n]*\n",
+        t,
+        flags=re.MULTILINE,
+    )
+    if not m:
+        return t
+    start = m.start()
+    rest = t[m.end() :]
+    m2 = re.search(r"^##\s*\d+\.\s+", rest, flags=re.MULTILINE)
+    end = m.end() + m2.start() if m2 else len(t)
+    return (t[:start] + t[end:]).strip()
+
+
 def read_session_memory_for_prompt(session_id: str) -> str:
-    """供注入提示词的摘录（有长度上限）。"""
+    """供注入提示词的摘录（剥离 §4 digest，并有长度上限）。"""
     raw = read_session_memory_raw(session_id)
-    return _truncate(raw, SESSION_MEMORY_PROMPT_MAX_CHARS)
+    return _truncate(_strip_digest_section(raw), SESSION_MEMORY_PROMPT_MAX_CHARS)
 
 
 def format_memory_for_prompt(excerpt: str, lang: str) -> str:
@@ -77,7 +98,10 @@ def format_memory_for_prompt(excerpt: str, lang: str) -> str:
     text = (excerpt or "").strip()
     if not text:
         return ""
+    text = _strip_digest_section(text)
     text = _truncate(text, SESSION_MEMORY_PROMPT_MAX_CHARS)
+    if not text:
+        return ""
     if lang == "zh":
         return f"\n\n【会话记忆 SESSION_MEMORY.md 摘录】\n{text}"
     return f"\n\n[SESSION_MEMORY.md excerpt]\n{text}"
@@ -199,11 +223,9 @@ def build_session_memory_markdown(
     so = _truncate((so or "").strip(), _MAX_PLAN_SECTION)
     ps = _truncate((planner_summary or "").strip(), _MAX_PLAN_SECTION)
 
+    # 优先复用 state 内已有 digest，避免每次 persist 重跑完整 Reader。
     digest = ""
-    root = resolve_workspace_root(session_id)
-    if root:
-        digest = _workspace_digest(root, session_id=session_id)
-    elif workspace_context and workspace_context.get("workspace_digest"):
+    if workspace_context and workspace_context.get("workspace_digest"):
         try:
             wd = workspace_context.get("workspace_digest")
             digest = _truncate(
@@ -220,6 +242,10 @@ def build_session_memory_markdown(
             )
         except Exception:
             digest = "（schema 不可用）"
+    else:
+        root = resolve_workspace_root(session_id)
+        if root:
+            digest = _workspace_digest(root, session_id=session_id)
 
     paths = code_file_paths or ["main.py"]
     cr = coder_results or []

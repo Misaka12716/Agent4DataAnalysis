@@ -4,12 +4,12 @@
 
 ## 1. 当前项目默认配置（基于本地 Docker MySQL 8）
 
-配置来源：`src/configs/config.py`
+配置权威来源：仓库根目录 **`.env`** 中的 `MYSQL_*`；[`src/configs/config.py`](../src/configs/config.py) 仅 `os.getenv` 转发。
 
 - `MYSQL_HOST=localhost`
 - `MYSQL_PORT=3308`
 - `MYSQL_USER=root`
-- `MYSQL_PASSWORD=AgentPlatform2026!`
+- `MYSQL_PASSWORD=AgentPlatform2026!`（请写在 `.env`，勿提交到代码）
 - `MYSQL_DB=agent_platform`
 - `MYSQL_CHARSET=utf8mb4`
 
@@ -362,11 +362,11 @@ sudo docker exec -it mysql8-agent mysql -u root -p -e "SHOW DATABASES;"
   - `src/db/models.py` — `users`、`session_user`、`session_content`
   - `src/db/project_schema.py` — `projects`、`project_assets`
   - `src/db/template_schema.py` — `mental_health_templates`
-- 运行时配置读取：`src/configs/config.py`
+- 运行时配置读取：仓库根 `.env` 的 `MYSQL_*`（经 `src/configs/config.py` 转发）
 
 Cube Sandbox 与工作区镜像语义见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md)。
 
-请确保代码配置与容器参数一致：
+请确保 `.env` 与容器参数一致：
 
 - `MYSQL_HOST=localhost`
 - `MYSQL_PORT=3308`
@@ -374,7 +374,7 @@ Cube Sandbox 与工作区镜像语义见 [Cubesandbox-agent-integration.md](./Cu
 - `MYSQL_PASSWORD=AgentPlatform2026!`
 - `MYSQL_DB=agent_platform`
 
-如果你修改了库名、端口或账号密码，请同步更新配置后重启后端服务。
+如果你修改了库名、端口或账号密码，请同步更新 `.env` 后重启后端服务。
 
 ## 8. 查询完整对话记录 / 工作区路径
 

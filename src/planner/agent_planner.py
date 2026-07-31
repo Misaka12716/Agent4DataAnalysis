@@ -198,7 +198,7 @@ class AgentPlanner:
     async def run_flow_with_workspace(
         self, session_id: str, input_requirement: str
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        file_info = self._get_workspace_file_info(session_id)
+        file_info = await asyncio.to_thread(self._get_workspace_file_info, session_id)
         async for item in self.run_flow(
             input_requirement=input_requirement,
             file_info=file_info,

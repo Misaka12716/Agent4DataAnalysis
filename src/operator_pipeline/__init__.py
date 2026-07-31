@@ -1,1 +1,1 @@
-# Minimal stub so operator_library solvers can import error codes.
+"""Web UI demo for composing Software 1 solver pipelines on an uploaded CSV."""

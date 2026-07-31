@@ -4,7 +4,7 @@
 from typing import AsyncGenerator, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
+from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL, LLM_REQUEST_TIMEOUT
 from configs.prompts import get_system_prompt, get_user_prompt
 from utils.model_logger import log_model_event, log_phase_end, log_phase_start
 from utils.session_memory import format_memory_for_prompt, read_session_memory_for_prompt
@@ -75,6 +75,7 @@ async def stream_report(
         api_key=API_KEY,
         base_url=OPENAI_COMPATIBLE_API_BASE,
         streaming=True,
+        timeout=LLM_REQUEST_TIMEOUT,
     )
     
     prompt = ChatPromptTemplate.from_messages([

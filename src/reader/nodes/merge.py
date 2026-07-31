@@ -4,19 +4,30 @@ from typing import Any, Dict, List
 def _build_summary(files: Dict[str, Any]) -> str:
     if not files:
         return "工作区未发现可解析文件"
-    counts = {"table": 0, "image": 0, "text": 0, "binary": 0}
+    counts = {
+        "table": 0,
+        "image": 0,
+        "text": 0,
+        "document": 0,
+        "imaging": 0,
+        "binary": 0,
+    }
     for info in files.values():
         ft = info.get("file_type") or "binary"
         counts[ft] = counts.get(ft, 0) + 1
+    labels = [
+        ("table", "个表格"),
+        ("image", "个图片"),
+        ("text", "个文本"),
+        ("document", "个文档"),
+        ("imaging", "个影像"),
+        ("binary", "个其它"),
+    ]
     parts = []
-    if counts.get("table"):
-        parts.append(f"{counts['table']} 个表格")
-    if counts.get("image"):
-        parts.append(f"{counts['image']} 个图片")
-    if counts.get("text"):
-        parts.append(f"{counts['text']} 个文本")
-    if counts.get("binary"):
-        parts.append(f"{counts['binary']} 个其它")
+    for key, suffix in labels:
+        n = counts.get(key) or 0
+        if n:
+            parts.append(f"{n} {suffix}")
     detail = "、".join(parts) if parts else "0 个文件"
     return f"共 {len(files)} 个文件：{detail}"
 

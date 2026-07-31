@@ -56,7 +56,20 @@ ap_stop_backend
 if [ "${WITH_FRONTEND}" -eq 1 ]; then
   ap_stop_frontend
 fi
-sleep 2
+# 等端口释放，避免 address already in use
+for _ in $(seq 1 20); do
+  if [ -z "$(ap_pids_listening_on_port "${BACKEND_PORT}")" ]; then
+    break
+  fi
+  sleep 0.5
+done
+if [ -n "$(ap_pids_listening_on_port "${BACKEND_PORT}")" ]; then
+  echo "[start] 错误: 端口 ${BACKEND_PORT} 仍被占用，无法启动" >&2
+  ap_pids_listening_on_port "${BACKEND_PORT}" | while read -r _pid; do
+    [ -n "${_pid}" ] && ps -p "${_pid}" -o pid=,args= 2>/dev/null || true
+  done >&2
+  exit 1
+fi
 
 BACKEND_LOG="${LOG_DIR}/backend.log"
 FRONTEND_LOG="${LOG_DIR}/frontend.log"
@@ -89,15 +102,28 @@ if [ "${WITH_FRONTEND}" -eq 1 ]; then
   echo "[start] 前端 PID=${FRONTEND_PID}  日志: ${FRONTEND_LOG}"
 fi
 
-sleep 2
-if curl -sf "http://127.0.0.1:${BACKEND_PORT}/health" >/dev/null 2>&1; then
+HEALTH_OK=0
+for _ in $(seq 1 30); do
+  if curl -sf "http://127.0.0.1:${BACKEND_PORT}/health" >/dev/null 2>&1; then
+    HEALTH_OK=1
+    break
+  fi
+  sleep 1
+done
+if [ "${HEALTH_OK}" -eq 1 ]; then
   echo "[start] 健康检查通过: http://127.0.0.1:${BACKEND_PORT}/health"
 else
-  echo "[start] 健康检查未通过，请查看日志: tail -f ${BACKEND_LOG}" >&2
+  echo "[start] 健康检查未通过（已等待 30s），请查看日志: tail -f ${BACKEND_LOG}" >&2
 fi
 
 if [ "${WITH_FRONTEND}" -eq 1 ]; then
-  echo "[start] 联调前端: http://${AP_BIND_HOST}:${FRONTEND_PORT}（验收登录 13800000000 / 888888）"
+  LAN_HOST="${AP_PUBLIC_HOST:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
+  LAN_HOST="${LAN_HOST:-127.0.0.1}"
+  echo "[start] 联调前端:"
+  echo "[start]   主页:     http://${LAN_HOST}:${FRONTEND_PORT}/"
+  echo "[start]   临床支持: http://${LAN_HOST}:${FRONTEND_PORT}/render_clinical_support_page"
+  echo "[start]   后端 API: http://${LAN_HOST}:${BACKEND_PORT}"
+  echo "[start]   验收登录: 侧栏「验收一键登录」(${ACCEPTANCE_MODE:-0}=1 时可用，账号 13800000000 / 888888)"
 fi
 
 echo "[start] 查看状态: bash scripts/status.sh"

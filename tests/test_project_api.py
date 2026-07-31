@@ -219,18 +219,88 @@ def test_project_upload_and_assets(client, auth_headers, mock_stores):
     r = client.post(
         "/project/1/upload",
         headers=auth_headers,
-        files={"file": ("data.csv", io.BytesIO(b"col1\n1\n"), "text/csv")},
+        files={"file": ("报告.csv", io.BytesIO(b"col1\n1\n"), "text/csv")},
     )
     assert r.status_code == 200
-    assert r.json()["relative_path"].startswith("raw/")
+    body = r.json()
+    assert body["relative_path"] == "raw/报告.csv"
+    assert body["original_filename"] == "报告.csv"
+    assert body.get("renamed") is False
 
     mocks["list_assets"].return_value = (
-        [{"id": 1, "project_id": 1, "asset_type": "upload", "relative_path": "raw/data.csv"}],
+        [
+            {
+                "id": 1,
+                "project_id": 1,
+                "asset_type": "upload",
+                "relative_path": "raw/报告.csv",
+                "original_filename": "报告.csv",
+            }
+        ],
         None,
     )
     r = client.get("/project/1/assets", headers=auth_headers)
     assert r.status_code == 200
     assert len(r.json()["data"]["assets"]) == 1
+
+
+def test_legacy_session_upload_keeps_original_name(client, auth_headers, mock_stores, isolated_workspaces):
+    mocks, _active, _archived, _ = mock_stores
+    legacy_path = isolated_workspaces / "10" / "legacy-sid"
+    legacy_path.mkdir(parents=True, exist_ok=True)
+    legacy_session = {
+        "session_id": "legacy-sid",
+        "user_id": 10,
+        "project_id": None,
+        "workspace_abs_path": str(legacy_path),
+    }
+
+    with patch("db.session_store.SessionStore.get_session_user", return_value=(legacy_session, None)), patch(
+        "backend.route_services.write_bytes_file", return_value=True
+    ), patch("backend.route_services.ensure_runtime"), patch(
+        "backend.route_services.persist_workspace_snapshot"
+    ):
+        r = client.post(
+            "/session/upload-excel",
+            headers=auth_headers,
+            data={"session_id": "legacy-sid"},
+            files={"file": ("demo.csv", io.BytesIO(b"a,b\n1,2"), "text/csv")},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["relative_path"] == "demo.csv"
+    assert body["original_filename"] == "demo.csv"
+    assert body.get("renamed") is False
+
+
+def test_legacy_session_upload_renames_on_conflict(client, auth_headers, mock_stores, isolated_workspaces):
+    mocks, _active, _archived, _ = mock_stores
+    legacy_path = isolated_workspaces / "10" / "legacy-sid-conflict"
+    legacy_path.mkdir(parents=True, exist_ok=True)
+    (legacy_path / "demo.csv").write_bytes(b"a,b\n0,0")
+    legacy_session = {
+        "session_id": "legacy-sid-conflict",
+        "user_id": 10,
+        "project_id": None,
+        "workspace_abs_path": str(legacy_path),
+    }
+
+    with patch("db.session_store.SessionStore.get_session_user", return_value=(legacy_session, None)), patch(
+        "backend.route_services.write_bytes_file", return_value=True
+    ), patch("backend.route_services.ensure_runtime"), patch(
+        "backend.route_services.persist_workspace_snapshot"
+    ):
+        r = client.post(
+            "/session/upload-excel",
+            headers=auth_headers,
+            data={"session_id": "legacy-sid-conflict"},
+            files={"file": ("demo.csv", io.BytesIO(b"a,b\n1,2"), "text/csv")},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["relative_path"] == "demo (1).csv"
+    assert body["original_filename"] == "demo.csv"
+    assert body.get("renamed") is True
 
 
 def test_legacy_session_upload_allowed(client, auth_headers, mock_stores, isolated_workspaces):
@@ -256,7 +326,6 @@ def test_legacy_session_upload_allowed(client, auth_headers, mock_stores, isolat
             files={"file": ("data.csv", io.BytesIO(b"a,b\n1,2"), "text/csv")},
         )
     assert r.status_code == 200
-
 
 def test_project_sessions_list(client, auth_headers, mock_stores):
     r = client.get("/project/1/sessions", headers=auth_headers)

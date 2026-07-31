@@ -176,7 +176,11 @@ def render_streaming_analysis_page(api_base: str, session_id: str) -> None:
                                 r.raise_for_status()
                                 resp_body = r.json()
                                 rp = str(resp_body.get("relative_path") or "").strip()
-                                ok_paths.append(rp or fname)
+                                orig = str(resp_body.get("original_filename") or fname).strip()
+                                display = orig if orig else (rp or fname)
+                                if resp_body.get("renamed") and rp and rp != orig:
+                                    display = f"{orig} → {rp}"
+                                ok_paths.append(display)
                                 ok_details.append({"file": fname, "response": resp_body})
                             except httpx.HTTPStatusError as e:
                                 err_msgs.append(

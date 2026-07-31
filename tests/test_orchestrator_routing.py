@@ -4,9 +4,39 @@ from configs.config import MAX_CODER_CORRECTIONS
 from orchestrator.routing import (
     SupervisorDecision,
     clamp_route,
+    has_analyzable_workspace,
     should_correct_code,
     should_skip_regenerate,
 )
+
+
+def _analyzable_workspace_context():
+    return {
+        "file_list": ["data.csv"],
+        "workspace_digest": {
+            "files": {
+                "data.csv": {
+                    "file_type": "table",
+                    "relative_path": "data.csv",
+                }
+            }
+        },
+    }
+
+
+def _empty_workspace_context():
+    """仅有 SESSION_MEMORY / main.py，视为无可分析数据。"""
+    return {
+        "file_list": ["SESSION_MEMORY.md", "main.py"],
+        "workspace_digest": {
+            "files": {
+                "main.py": {
+                    "file_type": "binary",
+                    "relative_path": "main.py",
+                }
+            }
+        },
+    }
 
 
 def _base_state(**overrides):
@@ -24,6 +54,8 @@ def _base_state(**overrides):
         "planner_run_count": 1,
         "reporter_done": False,
         "force_reporter": False,
+        # 有数据场景默认值，避免 no_data 钳制干扰既有回归用例
+        "workspace_context": _analyzable_workspace_context(),
     }
     state.update(overrides)
     return state
@@ -88,3 +120,46 @@ def test_worker_fail_then_coder_correct_routes_to_worker():
     )
     route, _ = clamp_route(after_correct, decision)
     assert route == "worker"
+
+
+def test_has_analyzable_workspace_false_for_memory_and_main_only():
+    assert has_analyzable_workspace(_empty_workspace_context()) is False
+    assert has_analyzable_workspace({}) is False
+    assert has_analyzable_workspace(None) is False
+
+
+def test_has_analyzable_workspace_true_for_table():
+    assert has_analyzable_workspace(_analyzable_workspace_context()) is True
+
+
+def test_clamp_route_no_data_forces_reporter_instead_of_coder():
+    """规划已通过但工作区无数据时，禁止硬走 coder/worker。"""
+    state = _base_state(
+        workspace_context=_empty_workspace_context(),
+        coder_results=[],
+        worker_results=None,
+        last_completed_stage="planner",
+        correction_attempts=0,
+    )
+    decision = SupervisorDecision(
+        next_stage="coder",
+        reason="开始写综述脚本",
+        feedback_for_next="",
+    )
+    route, reason = clamp_route(state, decision)
+    assert route == "reporter"
+    assert "无可分析数据" in reason
+
+
+def test_clamp_route_no_data_forces_reporter_instead_of_worker():
+    state = _base_state(
+        workspace_context=_empty_workspace_context(),
+        coder_results=[{"relative_path": "main.py", "success": True}],
+        worker_results=None,
+        last_completed_stage="coder",
+        correction_attempts=0,
+    )
+    decision = SupervisorDecision(next_stage="worker", reason="执行", feedback_for_next="")
+    route, reason = clamp_route(state, decision)
+    assert route == "reporter"
+    assert "无可分析数据" in reason

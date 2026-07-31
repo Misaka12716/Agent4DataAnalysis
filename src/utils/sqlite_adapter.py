@@ -18,6 +18,14 @@ class SQLiteHandler:
     def _translate_sql(self, sql):
         s = sql
         s = re.sub(r"%s", "?", s)
+        # SHOW COLUMNS FROM `table` [LIKE ?] -> PRAGMA table_info(table)
+        m = re.match(
+            r"^\s*SHOW\s+COLUMNS\s+FROM\s+[`\"]?(\w+)[`\"]?(?:\s+LIKE\s+\?)?\s*$",
+            s,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            return f"PRAGMA table_info({m.group(1)})"
         # Convert MySQL BIGINT/INT AUTO_INCREMENT -> INTEGER PRIMARY KEY AUTOINCREMENT
         s = re.sub(r"(BIGINT|INT)\s+AUTO_INCREMENT\s+PRIMARY\s+KEY", "INTEGER PRIMARY KEY AUTOINCREMENT", s, flags=re.IGNORECASE)
         s = re.sub(r"\s*AUTO_INCREMENT\s*", " AUTOINCREMENT ", s)
@@ -54,12 +62,42 @@ class SQLiteHandler:
 
     def query(self, sql, params=None):
         try:
+            was_show_columns = bool(
+                re.match(r"^\s*SHOW\s+COLUMNS\s+FROM\s+", sql or "", flags=re.IGNORECASE)
+            )
+            like_filter = None
+            if was_show_columns and params:
+                like_filter = params[0]
+                params = ()
             sql = self._translate_sql(sql)
             cur = self.conn.execute(sql, params or ())
-            rows = cur.fetchall()
-            return [dict(row) for row in rows], None
+            rows = [dict(row) for row in cur.fetchall()]
+            if was_show_columns:
+                # PRAGMA table_info -> MySQL SHOW COLUMNS shape (Field)
+                mapped = []
+                for r in rows:
+                    name = r.get("name")
+                    if like_filter is not None and str(name) != str(like_filter):
+                        continue
+                    mapped.append({"Field": name, "Type": r.get("type"), "name": name})
+                return mapped, None
+            return rows, None
         except Exception as e:
             return [], str(e)
+
+    def get_table_columns(self, table_name: str):
+        """与 MySQLHandler.get_table_columns 对齐。"""
+        if not table_name or not re.match(r"^[A-Za-z0-9_]+$", table_name):
+            return set()
+        rows, err = self.query(f"SHOW COLUMNS FROM `{table_name}`")
+        if err or not rows:
+            return set()
+        cols = set()
+        for r in rows:
+            name = r.get("Field") or r.get("name")
+            if name:
+                cols.add(str(name))
+        return cols
 
     def execute(self, sql, params=None, auto_commit=True):
         try:

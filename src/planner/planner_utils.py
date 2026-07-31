@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
-from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL
+from configs.config import OPENAI_COMPATIBLE_API_BASE, API_KEY, DEFAULT_MODEL, LLM_REQUEST_TIMEOUT
 from utils.model_logger import log_model_event, log_milestone, log_phase_end, log_phase_start
 
 
@@ -46,6 +46,7 @@ def create_llm(streaming: bool = True) -> ChatOpenAI:
         api_key=API_KEY,
         base_url=OPENAI_COMPATIBLE_API_BASE,
         streaming=streaming,
+        timeout=LLM_REQUEST_TIMEOUT,
     )
 
 

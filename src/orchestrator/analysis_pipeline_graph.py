@@ -19,6 +19,8 @@ from orchestrator.routing import (
     SupervisorDecision,
     clamp_route as _clamp_route,
     code_write_succeeded as _code_write_succeeded,
+    has_analyzable_workspace as _has_analyzable_workspace,
+    placeholder_worker_results_no_data as _placeholder_worker_results_no_data,
     plan_is_valid as _plan_is_valid,
     should_correct_code as _should_correct_code,
     should_skip_regenerate as _should_skip_regenerate,
@@ -34,6 +36,7 @@ from configs.prompts import append_orchestrator_feedback, get_system_prompt
 from configs.config import (
     API_KEY,
     DEFAULT_ORCHESTRATOR_MODEL,
+    LLM_REQUEST_TIMEOUT,
     MAX_SUPERVISOR_INVOCATIONS,
     OPENAI_COMPATIBLE_API_BASE,
 )
@@ -71,9 +74,14 @@ async def _emit_pipeline_event(
     q: asyncio.Queue[Any],
     payload: Dict[str, Any],
 ) -> None:
-    """事件先入库，再进入流式队列。"""
-    _persist_pipeline_event(session_id, payload)
+    """事件先入库，再进入流式队列（落库放到线程池，避免阻塞事件循环）。"""
+    await asyncio.to_thread(_persist_pipeline_event, session_id, payload)
     await q.put(payload)
+
+
+async def _persist_state_async(state: Dict[str, Any], **kwargs: Any) -> None:
+    """将 persist_from_pipeline_state（含 Reader/磁盘 IO）放到线程池，避免阻塞事件循环。"""
+    await asyncio.to_thread(persist_from_pipeline_state, state, **kwargs)
 
 
 def _should_try_json_schema_method(llm: ChatOpenAI) -> bool:
@@ -343,6 +351,7 @@ async def _supervisor_node(state: PipelineState) -> Dict[str, Any]:
         temperature=0.1,
         api_key=API_KEY,
         base_url=OPENAI_COMPATIBLE_API_BASE,
+        timeout=LLM_REQUEST_TIMEOUT,
     )
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     try:
@@ -361,7 +370,18 @@ async def _supervisor_node(state: PipelineState) -> Dict[str, Any]:
     if force_rep and next_route == "reporter":
         pass
 
-    mem_hint = format_memory_for_prompt(read_session_memory_for_prompt(session_id), lang).strip()
+    # 无分析数据且被钳制到 reporter：注入占位 worker 结果，满足 reporter 前置契约。
+    no_data = not _has_analyzable_workspace(state.get("workspace_context"))
+    placeholder_wr = None
+    if (
+        next_route == "reporter"
+        and no_data
+        and state.get("worker_results") is None
+    ):
+        placeholder_wr = _placeholder_worker_results_no_data(lang)
+
+    mem_raw = await asyncio.to_thread(read_session_memory_for_prompt, session_id)
+    mem_hint = format_memory_for_prompt(mem_raw, lang).strip()
     orch = {
         "type": "orchestrator",
         "data": {
@@ -384,6 +404,7 @@ async def _supervisor_node(state: PipelineState) -> Dict[str, Any]:
             "reason": reason,
             "feedback_len": len(feedback),
             "force_reporter": bool(force_rep and not state.get("reporter_done")),
+            "no_data_placeholder": bool(placeholder_wr),
         },
     )
 
@@ -399,7 +420,7 @@ async def _supervisor_node(state: PipelineState) -> Dict[str, Any]:
             }
         ]
     )[-8:]
-    sup_out = {
+    sup_out: Dict[str, Any] = {
         "supervisor_invoke_count": n,
         "next_route": next_route,
         "last_supervisor_reason": reason,
@@ -407,8 +428,10 @@ async def _supervisor_node(state: PipelineState) -> Dict[str, Any]:
         "force_reporter": force_rep and not state.get("reporter_done"),
         "memory_trace": new_trace,
     }
+    if placeholder_wr is not None:
+        sup_out["worker_results"] = placeholder_wr
     try:
-        persist_from_pipeline_state(
+        await _persist_state_async(
             {**state, **sup_out},
             last_event="supervisor",
             streaming_status="running",
@@ -470,7 +493,7 @@ async def _planner_node(state: PipelineState) -> Dict[str, Any]:
             "worker_results": None,
         }
         try:
-            persist_from_pipeline_state(
+            await _persist_state_async(
                 {**state, **bad},
                 last_event="planner",
                 streaming_status="running",
@@ -495,19 +518,20 @@ async def _planner_node(state: PipelineState) -> Dict[str, Any]:
             "steps_outline_len": len(so),
         },
     )
+    ws_ctx = await asyncio.to_thread(_build_workspace_context, session_id)
     good = {
         "plan_data": plan_data,
         "planner_summary": ps,
         "requirement_analysis": ra,
         "steps_outline": so,
-        "workspace_context": _build_workspace_context(session_id),
+        "workspace_context": ws_ctx,
         "last_completed_stage": "planner",
         "supervisor_feedback": "",
         "planner_run_count": int(state.get("planner_run_count") or 0) + 1,
         "worker_results": None,
     }
     try:
-        persist_from_pipeline_state(
+        await _persist_state_async(
             {**state, **good},
             last_event="planner",
             streaming_status="running",
@@ -525,7 +549,9 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
     lang = state.get("lang") or "zh"
     paths = state.get("code_file_paths") or ["main.py"]
     rel = paths[0]
-    ws = state.get("workspace_context") or _build_workspace_context(session_id)
+    ws = state.get("workspace_context")
+    if not ws:
+        ws = await asyncio.to_thread(_build_workspace_context, session_id)
     wr = state.get("worker_results")
     fb = (state.get("supervisor_feedback") or "").strip()
     use_correct = _should_correct_code(state)
@@ -545,7 +571,29 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
         },
     )
 
-    mem_ex = read_session_memory_for_prompt(session_id)
+    # 防御：无可分析数据时不调用 LLM，避免综述类需求硬走代码生成堵死事件循环。
+    if not _has_analyzable_workspace(ws) and not use_correct:
+        log_phase_end(
+            session_id,
+            "coder",
+            {
+                "relative_path": rel,
+                "mode": "skip_no_analyzable_data",
+                "skipped": True,
+                "correction_attempts_after": int(state.get("correction_attempts") or 0),
+            },
+        )
+        return {
+            "workspace_context": ws,
+            "last_completed_stage": "coder",
+            "supervisor_feedback": "",
+            "last_coder_mode": "skip_no_analyzable_data",
+            "coder_results": [],
+            "worker_results": state.get("worker_results")
+            or _placeholder_worker_results_no_data(lang),
+        }
+
+    mem_ex = await asyncio.to_thread(read_session_memory_for_prompt, session_id)
 
     if skip_regenerate:
         log_phase_end(
@@ -567,13 +615,14 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
 
     if use_correct:
         # 修复路径：把错误摘要喂给 Coder，定点修补目标文件。
-        one = correct_and_write_code(
+        one = await asyncio.to_thread(
+            correct_and_write_code,
             session_id,
             rel,
             err_text,
-            lang=lang,
-            workspace_context=ws,
-            session_memory_excerpt=mem_ex,
+            lang,
+            ws,
+            mem_ex,
         )
         results = [one]
         corr = int(state.get("correction_attempts") or 0) + 1
@@ -594,12 +643,13 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
                 "relative_path": rel,
             }
         ]
-        results = generate_and_write_code(
+        results = await asyncio.to_thread(
+            generate_and_write_code,
             session_id,
             code_specs,
-            lang=lang,
-            workspace_context=ws,
-            session_memory_excerpt=mem_ex,
+            lang,
+            ws,
+            mem_ex,
         )
         corr = int(state.get("correction_attempts") or 0)
 
@@ -634,7 +684,7 @@ async def _coder_node(state: PipelineState) -> Dict[str, Any]:
     if use_correct and _code_write_succeeded(results):
         cod_out["worker_results"] = None
     try:
-        persist_from_pipeline_state(
+        await _persist_state_async(
             {**state, **cod_out},
             last_event="coder",
             streaming_status="running",
@@ -656,9 +706,8 @@ async def _worker_node(state: PipelineState) -> Dict[str, Any]:
         "worker",
         {"execution_mode": mode, "paths": paths},
     )
-    # run_workspace_tasks 为同步函数，这里直接调用即可；
-    # 若后续执行耗时显著，可考虑迁移到线程池。
-    results = run_workspace_tasks(session_id, mode, paths)
+    # 同步执行放到线程池，避免阻塞 uvicorn 事件循环。
+    results = await asyncio.to_thread(run_workspace_tasks, session_id, mode, paths)
     await _emit_pipeline_event(session_id, q, {"type": "worker", "data": results})
     log_phase_end(
         session_id,
@@ -674,7 +723,7 @@ async def _worker_node(state: PipelineState) -> Dict[str, Any]:
         "supervisor_feedback": "",
     }
     try:
-        persist_from_pipeline_state(
+        await _persist_state_async(
             {**state, **wr_out},
             last_event="worker",
             streaming_status="running",
@@ -725,7 +774,7 @@ async def _reporter_node(state: PipelineState) -> Dict[str, Any]:
         "supervisor_feedback": "",
     }
     try:
-        persist_from_pipeline_state(
+        await _persist_state_async(
             {**state, **rep_out},
             report_excerpt=report_excerpt,
             last_event="reporter",
@@ -829,11 +878,11 @@ async def run_orchestrated_analysis_stream(
         final_state: Optional[Dict[str, Any]] = None
         try:
             try:
-                persist_from_pipeline_state(
-                    {
-                        **initial,
-                        "workspace_context": _build_workspace_context(session_id),
-                    },
+                # 启动时把真实工作区上下文写入图状态，使 no_data 钳制从第一步生效。
+                ws_ctx = await asyncio.to_thread(_build_workspace_context, session_id)
+                initial["workspace_context"] = ws_ctx
+                await _persist_state_async(
+                    initial,
                     last_event="pipeline_start",
                     streaming_status="running",
                     pipeline_note="本轮分析任务已启动；以下为启动时工作区快照。",
@@ -859,14 +908,14 @@ async def run_orchestrated_analysis_stream(
             try:
                 merged = {**initial, **(final_state or {})}
                 if terminal_event is None:
-                    persist_from_pipeline_state(
+                    await _persist_state_async(
                         merged,
                         streaming_status="completed",
                         last_event="pipeline_finished",
                         pipeline_note="本轮流水线已结束（正常路径）。",
                     )
                 else:
-                    persist_from_pipeline_state(
+                    await _persist_state_async(
                         merged,
                         streaming_status="error_or_incomplete",
                         last_event="pipeline_finished",
@@ -882,7 +931,10 @@ async def run_orchestrated_analysis_stream(
                     "terminal_event": terminal_event,
                 },
             )
-            release_runtime(session_id)
+            try:
+                await asyncio.to_thread(release_runtime, session_id)
+            except Exception:
+                logger.exception("release_runtime failed: session_id=%s", session_id)
             # 终态事件与普通阶段事件统一走队列转发，避免依赖函数尾部二次 yield。
             if terminal_event is not None:
                 await _emit_pipeline_event(session_id, q, terminal_event)

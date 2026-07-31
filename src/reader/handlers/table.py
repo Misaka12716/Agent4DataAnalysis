@@ -145,7 +145,27 @@ def _serialize_sample_rows(df: pd.DataFrame, n: int) -> List[List[Any]]:
 
 def _read_raw_table(fp: str, ext: str) -> pd.DataFrame:
     if ext in (".csv", ".tsv"):
-        return pd.read_csv(fp, header=None, sep="\t" if ext == ".tsv" else ",")
+        sep = "\t" if ext == ".tsv" else ","
+        last_err: Optional[Exception] = None
+        for enc in ("utf-8", "utf-8-sig", "gbk", "gb2312", "latin-1"):
+            try:
+                return pd.read_csv(fp, header=None, sep=sep, encoding=enc)
+            except UnicodeDecodeError as e:
+                last_err = e
+                continue
+            except Exception as e:
+                # 编码可接受但仍解析失败时直接抛出
+                if isinstance(e, UnicodeError):
+                    last_err = e
+                    continue
+                raise
+        if last_err is not None:
+            raise last_err
+        return pd.read_csv(fp, header=None, sep=sep, encoding="utf-8", encoding_errors="replace")
+    if ext == ".xlsx":
+        return pd.read_excel(fp, header=None, engine="openpyxl")
+    if ext == ".xls":
+        return pd.read_excel(fp, header=None, engine="xlrd")
     return pd.read_excel(fp, header=None)
 
 

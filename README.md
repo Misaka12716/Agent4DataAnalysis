@@ -16,8 +16,8 @@
 
 - 会话级工作区：每个用户在 `TEMP_FOLDER/workspaces/<user_id>/<project_id>/sessions/<session_id>/` 拥有独立目录（历史数据可能仍在 `.../<user_id>/<session_id>/`，只读兼容）；默认经 **本地 Runtime**（[`src/runtime/`](src/runtime/)）读写与执行 Python。
 - **项目模型**：Project 是 RBAC 与资产容器；Session 是一次分析/对话的执行单元。分析前须创建会话并将数据上传到会话工作区（或从项目 `raw/` 复制，见 `POST /session/copy-from-project-raw`）。
-- 代码执行：Worker 通过 **独立 Runner 环境**（`RUNNER_PYTHON` / `agentPlatform-runner`）运行 `python3 <相对路径>`，与 FastAPI 主环境隔离。
-- 文件上传：支持将 `xlsx/xls/csv` 等写入工作区根目录，并按 `data.xxx`、`data_1.xxx` 规则命名。
+- 代码执行：Worker 通过 **`RUNNER_PYTHON`** 使用专用 conda 环境 `agentPlatform-runner`（依赖见 [`requirements-runner.txt`](requirements-runner.txt)），与 FastAPI 主环境隔离。conda `base` 为根环境不可改名，勿当作 Runner。
+- 文件上传：支持将 `xlsx/xls/csv` 等写入工作区根目录；无同名冲突时保留用户原名，冲突时自动改为 `原名 (1).ext`。
 - 任务流式分析：后端通过 SSE 持续推送编排决策、各阶段事件与报告片段；每条有效负载会先写入 MySQL 会话内容（累计全文 + 版本号），再推送给客户端。
 - 断线重连：可通过快照接口拉取当前累计内容与版本号。
 - 最简测试前端：内置 Streamlit 页面用于联调上传/快照/流式分析接口。
@@ -54,8 +54,8 @@ AgentPlatform/
 
 ## 运行环境
 
-- **主服务 Python**：`3.13.x`（conda 环境 `agentPlatform`，含 LangChain / LangGraph，见 [`requirements.txt`](requirements.txt)）
-- **Runner Python**：独立 conda 环境 `agentPlatform-runner`（Worker 执行 Agent 代码，见 [`requirements-runner.txt`](requirements-runner.txt)）
+- **主服务 Python**：`3.13.x`（conda 环境 `agentPlatform`，`/opt/miniconda/envs/agentPlatform`，见 [`requirements.txt`](requirements.txt)）
+- **Runner Python**：conda `agentPlatform-runner`（本机 `/data/pjw/.conda/envs/agentPlatform-runner`；依赖 [`requirements-runner.txt`](requirements-runner.txt)）。由 `.env` 的 `RUNNER_PYTHON` 指定。**base 不可改名，勿用作专用 Runner。**
 - 数据库: MySQL（用于会话内容和工作区路径持久化）
 - 推荐 OS: Linux
 
@@ -69,10 +69,13 @@ AgentPlatform/
 conda create -n agentPlatform python=3.13.7
 conda activate agentPlatform
 pip install -r requirements.txt
+# 含文档/表格解析：python-docx、pypdf/PyPDF2、pydicom、openpyxl、xlrd、Pillow 等
 
-# Runner 执行环境（Worker 代码运行，与主服务隔离）
-bash scripts/setup-runner-env.sh
-export RUNNER_PYTHON="$(conda run -n agentPlatform-runner which python)"
+# Worker：专用 agentPlatform-runner（本机路径见上）
+# bash scripts/setup-runner-env.sh
+# 或按 requirements-runner.txt 安装到已有 agentPlatform-runner
+# .env: RUNNER_PYTHON=/data/pjw/.conda/envs/agentPlatform-runner/bin/python
+bash scripts/diagnose-runner-env.sh
 ```
 
 可选：注册 Jupyter 内核
@@ -89,10 +92,12 @@ python -m ipykernel install --user --name agentPlatform --display-name "Python (
 
 关键项（按需修改）：
 
-- 模型接口：
+- 模型接口（三模型分工，详见 [`docs/Models.md`](docs/Models.md)）：
   - `OPENAI_COMPATIBLE_API_BASE`（默认 `http://localhost:11434/v1`）
   - `API_KEY`
-  - `DEFAULT_MODEL` / `DEFAULT_CODER_MODEL`
+  - `DEFAULT_MODEL`：通用文本（Planner / Reader / Reporter / 临床等，默认 `glm-4.7-flash:q4_K_M`）
+  - `DEFAULT_CODER_MODEL`：Coder 专用（默认 `qwen3-coder:30b`）
+  - `DEFAULT_VISION_MODEL`：OCR / 图片识别（默认 `deepseek-ocr:latest`）
   - `DEFAULT_ORCHESTRATOR_MODEL`：Supervisor 路由用模型（可通过环境变量覆盖，默认与 `DEFAULT_MODEL` 相同）
 - 编排上限（可通过环境变量覆盖）：
   - `MAX_SUPERVISOR_INVOCATIONS`：Supervisor 决策次数上限（默认 `24`）；临近上限时会强制进入 Reporter，避免卡死
@@ -111,7 +116,7 @@ python -m ipykernel install --user --name agentPlatform --display-name "Python (
 
 | 环境变量 | 说明 | 默认 |
 |----------|------|------|
-| `RUNNER_PYTHON` | Worker 代码执行的 Python 解释器路径 | `python3`（建议设为 agentPlatform-runner） |
+| `RUNNER_PYTHON` | Worker 解释器绝对路径（专用 `agentPlatform-runner`） | 本机示例：`/data/pjw/.conda/envs/agentPlatform-runner/bin/python` |
 | `CUBE_SANDBOX_ENABLED` | `1` 启用 Cube Sandbox 后端；`0` 本地 Runtime | `0` |
 | `RUNTIME_COMMAND_TIMEOUT` | 单次命令超时（秒） | `300` |
 | `RUNTIME_MAX_OUTPUT_CHARS` | stdout/stderr 截断上限 | `524288` |
@@ -241,7 +246,7 @@ curl http://localhost:52716/health
 3. **Supervisor**：每次子阶段结束后回到 Supervisor，由结构化 LLM 决策下一步（`planner` / `coder` / `worker` / `reporter` / `finish`）；非法跳步会被代码侧「钳制」为合法路由。
 4. **Planner**：产出包含「需求解析」「步骤分解」等字段的规划；无效规划会触发重试直至上限。
 5. **Coder**：首次生成并写入工作区代码（默认 `main.py`）；Worker 失败且未超修正次数时走「修正写入」路径，并附带 stderr 等错误摘要。
-6. **Worker**：经 `RUNNER_PYTHON` 指定的独立环境执行 `runtime.commands.run("python3 <相对路径>")`，汇总 `stdout/stderr` 与成功标志。
+6. **Worker**：经 `RUNNER_PYTHON` 指定的解释器执行 `runtime.commands.run("python3 <相对路径>")`，汇总 `stdout/stderr` 与成功标志。
 7. **Reader / workspace-tree**：直接读取工作区目录。
 8. **Reporter**：根据规划摘要与 Worker 结果流式输出报告片段。
 9. **流水线结束**：调用 `release_runtime(session_id)`（沙箱模式下 pause VM）；SSE 持久化逻辑不变——每个 JSON 片段先写入 MySQL，再推送客户端。
@@ -276,13 +281,14 @@ curl http://localhost:52716/health
 
 ### 3) 上传后找不到文件
 
-系统会将文件重命名为 `data.xxx`、`data_1.xxx` 等统一命名，请在返回值中的 `relative_path` 查看实际文件名。会话工作区位于 `tmp/workspaces/<user_id>/<project_id>/sessions/<session_id>/`。
+无冲突时保留用户原始文件名；若工作区已存在同名文件，则自动重命名为 `原名 (1).ext`、`原名 (2).ext` …。请以返回值中的 `relative_path` 为准查看实际存盘名，`original_filename` 为上传时的客户端原名。会话工作区位于 `tmp/workspaces/<user_id>/<project_id>/sessions/<session_id>/`。
 
 ### 4) Worker 报错或缺少 pandas 等包
 
-- 运行 `bash scripts/diagnose-runner-env.sh` 检查 `RUNNER_PYTHON`。
-- 未设置时 Worker 回退系统 `python3`，可能与主环境混用或缺少数据分析包。
-- Runner 依赖见 [`requirements-runner.txt`](requirements-runner.txt)；启用 Cube Sandbox 时另需检查模板内 Python 与依赖。
+- 确认 `.env` 中 `RUNNER_PYTHON=/data/pjw/.conda/envs/agentPlatform-runner/bin/python`，并运行 `bash scripts/diagnose-runner-env.sh`。
+- 缺包：`/data/pjw/.conda/envs/agentPlatform-runner/bin/python -m pip install -r requirements-runner.txt`。
+- 重建：`bash scripts/setup-runner-env.sh`（或按 StartInstruction 用 `-p` 在 `/data/pjw/.conda/envs/` 创建）。
+- 启用 Cube Sandbox 时另需检查模板内 Python 与依赖。
 
 ### 5) 流水线未走到报告或频繁回溯
 
@@ -300,7 +306,8 @@ curl http://localhost:52716/health
 
 ## 相关文档
 
-- **正式前端对接（产品 UI）**：[`docs/FrontendIntegrationGuide.md`](docs/FrontendIntegrationGuide.md)
+- **正式前端对接（产品 UI）**：[`docs/2.1.1FrontendIntegrationGuide.md`](docs/2.1.1FrontendIntegrationGuide.md)
+- 测试说明：[`docs/Tests.md`](docs/Tests.md)
 - 启动说明：[`docs/StartInstruction.md`](docs/StartInstruction.md)
 - 模板分析 API：[`docs/TemplateAPI.md`](docs/TemplateAPI.md)
 - Cube Sandbox 部署：[`docs/Cubesandbox-deploy.md`](docs/Cubesandbox-deploy.md)

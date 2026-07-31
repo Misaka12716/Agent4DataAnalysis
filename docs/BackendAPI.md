@@ -401,7 +401,7 @@
 
 ### 3.8 上传会话文件（多模态）
 
-- 路径：`POST /session/upload-excel`（历史路径名保留；实际支持表格 / 图片 / 文本，与 Reader 分类一致）
+- 路径：`POST /session/upload-excel`（历史路径名保留；实际支持表格 / 图片 / 文本 / 文档 / 医学影像，与 FormatRegistry + Reader 分类一致）
 - 处理函数：`handle_session_upload_excel(...)`
 - 鉴权：`Authorization: Bearer <access_token>`（必填）；且 session 须属于当前用户
 - Content-Type：`multipart/form-data`
@@ -409,11 +409,13 @@
 - 请求体参数（form-data）：
   - `file`：文件（必填）
   - `session_id`：字符串（必填）
-- **允许扩展名（白名单）**：
+- **允许扩展名（白名单，由 FormatRegistry 驱动）**：
   - **table**：`.xlsx`、`.xls`、`.csv`、`.tsv`
-  - **image**：`.png`、`.jpg`、`.jpeg`、`.gif`、`.webp`、`.bmp`（Reader 可走 Vision 多模态，需配置 `DEFAULT_VISION_MODEL`）
+  - **image**：`.png`、`.jpg`、`.jpeg`、`.gif`、`.webp`、`.bmp`（Reader 经 `DEFAULT_VISION_MODEL`/deepseek-ocr:latest 识别文字后写入 digest）
   - **text**：`.txt`、`.md`、`.json`、`.yaml`、`.yml`、`.log`、`.xml`、`.html`、`.htm`
-  - 其余类型（如 `.pdf`）返回 `415`
+  - **document**：`.pdf`、`.docx`
+  - **imaging**：`.dcm`、`.dicom`
+  - 未注册类型返回 `415`；自定义扩展可通过 `knowledge/format_rules.json` 或内置规则配置
 - 请求体示例（curl）：
 ```bash
 curl -X POST "http://localhost:52716/session/upload-excel" \
@@ -427,7 +429,7 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
   - `session_id: str`
   - `relative_path: str`
   - `original_filename: str`
-  - `file_category: str`（`table` / `image` / `text`）
+  - `file_category: str`（`table` / `image` / `text` / `document` / `imaging`）
   - `workspace_abs_path: str`（会话工作区绝对路径）
 - 成功返回示例（`200`）：
 ```json
@@ -435,8 +437,9 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
   "status": "success",
   "message": "文件已写入会话工作区根目录",
   "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
-  "relative_path": "data.xlsx",
+  "relative_path": "demo.xlsx",
   "original_filename": "demo.xlsx",
+  "renamed": false,
   "file_category": "table",
   "workspace_abs_path": "/data1/pjw/AgentPlatform/tmp/workspaces/12/9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 }
@@ -451,11 +454,11 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
   - `500`：写文件失败
 - 实现逻辑（关键步骤）：
   1. 校验 `session_id` 非空、归属当前用户且已存在。
-  2. 校验扩展名在 Reader 支持的 table/image/text 白名单内。
+  2. 校验扩展名在 FormatRegistry 可深度解析白名单内。
   3. 校验文件大小不超过 `MAX_FILE_SIZE`。
-  4. 按 `data.xxx`/`data_1.xxx` 递增命名避免重名。
+  4. 无同名冲突时保留清洗后的用户原名；冲突时自动分配 `原名 (1).ext` / `原名 (2).ext` …
   5. 经 `ensure_runtime(session_id).files.write` 写入工作区，并刷新 `SESSION_MEMORY.md` 快照。
-  6. 响应中的 `workspace_abs_path` 为 DB 中记录的工作区路径。
+  6. 响应中的 `workspace_abs_path` 为 DB 中记录的工作区路径；`original_filename` 为客户端原名，`relative_path` 为实际存盘名。
 
 ---
 
@@ -736,7 +739,7 @@ data: {"type":"snapshot","session_id":"...","content":"...","version":35,"timest
 - **历史 legacy 目录**：`{TEMP_FOLDER}/workspaces/<user_id>/<session_id>/`（只读兼容；迁移见 `scripts/migrate-legacy-sessions.sh`）。
 - **权威路径**：`session_user.workspace_abs_path` / `projects.workspace_abs_path`；`resolve_workspace_root(session_id)` 优先读 DB。
 - **统一执行层**：[`src/runtime/`](../src/runtime/) 提供 `ensure_runtime(session_id)`，上层通过 `runtime.files.*` / `runtime.commands.run` 读写与执行，不再在各模块分散判断沙箱开关。
-- **默认后端**：本地 Runtime（`CUBE_SANDBOX_ENABLED=0`），Worker 使用 **`RUNNER_PYTHON`** 指向的独立 conda 环境（如 `agentPlatform-runner`），与运行 FastAPI 的 `agentPlatform` 环境分离。
+- **默认后端**：本地 Runtime（`CUBE_SANDBOX_ENABLED=0`），Worker 使用 **`RUNNER_PYTHON`**（`.env` 配置；依赖见 [`requirements-runner.txt`](../requirements-runner.txt)）执行生成代码，与 FastAPI 主环境 `agentPlatform` 分离。可选隔离 conda：`agentPlatform-runner`。
 - **可选后端**：`CUBE_SANDBOX_ENABLED=1` 时经 `SandboxRuntimeAdapter` 走 Cube MicroVM；不可用时 factory 自动降级本地 Runtime。
 
 - `session_user`：
@@ -879,5 +882,5 @@ curl http://localhost:52716/health
 - SSE 是持续连接，前端需按流式协议处理 `data:` 行。
 - 会话内容按“完整累计文本”落库，体量较大时可考虑后续改为增量片段存储策略。
 - 短信验证码存储在服务内存中，服务重启后验证码会丢失；如需多实例部署，建议迁移到 Redis 等集中缓存。
-- **执行 Runtime**：默认本地（`CUBE_SANDBOX_ENABLED=0`）。Worker 通过 `RUNNER_PYTHON`（建议 `agentPlatform-runner`）执行 Agent 生成的 Python，与 FastAPI 主环境隔离。详见 [`StartInstruction.md`](StartInstruction.md)。
+- **执行 Runtime**：默认本地（`CUBE_SANDBOX_ENABLED=0`）。Worker 通过 `RUNNER_PYTHON`（须满足 [`requirements-runner.txt`](../requirements-runner.txt)）执行 Agent 生成的 Python，与 FastAPI 主环境隔离。详见 [`StartInstruction.md`](StartInstruction.md)。
 - **Cube Sandbox（可选）**：`CUBE_SANDBOX_ENABLED=1` 时 factory 尝试沙箱后端；Cube 不可用时自动降级本地 Runtime。部署与排查见 [`Cubesandbox-agent-integration.md`](Cubesandbox-agent-integration.md)。

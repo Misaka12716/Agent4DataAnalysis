@@ -30,11 +30,39 @@ from frontend.page_utils import (
 )
 
 try:
-    from reader.file_types import guess_upload_mime
+    from reader.file_types import guess_upload_mime, upload_allowed_extensions
 except ImportError:
 
     def guess_upload_mime(name, _=None):
         return "application/octet-stream"
+
+    def upload_allowed_extensions():
+        # 与 FormatRegistry 内置白名单保持一致（无点、小写）
+        return [
+            "bmp",
+            "csv",
+            "dcm",
+            "dicom",
+            "docx",
+            "gif",
+            "htm",
+            "html",
+            "jpeg",
+            "jpg",
+            "json",
+            "log",
+            "md",
+            "pdf",
+            "png",
+            "tsv",
+            "txt",
+            "webp",
+            "xls",
+            "xlsx",
+            "xml",
+            "yaml",
+            "yml",
+        ]
 
 
 DISEASE_LABELS = {
@@ -227,7 +255,7 @@ def render_project_lifecycle(api_base: str = API_BASE) -> None:
     else:
         uploaded = st.file_uploader(
             "上传原始数据到项目 raw/",
-            type=["xlsx", "xls", "csv", "tsv", "txt", "md", "json"],
+            type=upload_allowed_extensions(),
             key="project_raw_upload",
         )
         if uploaded and st.button("写入 raw/", key="btn_project_raw_upload"):

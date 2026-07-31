@@ -21,7 +21,16 @@ from db.rbac_schema import (
     PERM_TRAINING_CREATE,
 )
 
-API_BASE = "http://localhost:52716"
+def _default_api_base() -> str:
+    explicit = os.getenv("API_BASE", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    host = os.getenv("AP_PUBLIC_HOST", "").strip() or "localhost"
+    port = os.getenv("BACKEND_PORT", "52716").strip() or "52716"
+    return f"http://{host}:{port}"
+
+
+API_BASE = _default_api_base()
 ACCEPTANCE_PHONE = "13800000000"
 ACCEPTANCE_CODE = "888888"
 

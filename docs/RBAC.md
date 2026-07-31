@@ -70,7 +70,7 @@
 
 前端 Streamlit 页面通过 `/auth/me` 缓存的 `permissions_summary` 按权限隐藏/禁用上传、分析、归档等操作；**后端 API 校验仍是安全边界**。
 
-**产品前端对接**：详见 [`FrontendIntegrationGuide.md`](FrontendIntegrationGuide.md)（项目/会话模型、页面流程、权限缓存、API 速查）。
+**产品前端对接**：详见 [`2.1.1FrontendIntegrationGuide.md`](2.1.1FrontendIntegrationGuide.md)（项目/会话模型、页面流程、权限缓存、API 速查）。
 
 ## 5. HTTP 错误码
 

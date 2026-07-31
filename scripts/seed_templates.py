@@ -126,7 +126,8 @@ def seed_demo_session(user_id: int) -> Path:
     ws = ROOT / "workspace" / "sessions" / DEMO_SID
     ws.mkdir(parents=True, exist_ok=True)
     if CROSS_SECTION_XLSX.is_file():
-        shutil.copy2(CROSS_SECTION_XLSX, ws / "mental_health_sample.xlsx")
+        # copyfile：共享 workspace 下目标文件可能属主不同，copy2 的 copystat 会 PermissionError
+        shutil.copyfile(CROSS_SECTION_XLSX, ws / "mental_health_sample.xlsx")
 
     mysql_handler.execute(
         f"DELETE FROM {TABLE_SESSION_USER} WHERE session_id = %s", (DEMO_SID,)

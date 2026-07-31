@@ -3,6 +3,9 @@ from typing import Any, Dict, List
 
 from reader.file_types import classify_file
 
+# 与 project_asset_registry 对齐：会话记忆由编排写入，勿再被 Reader 摘要以免自嵌套膨胀
+_SKIP_FILENAMES = frozenset({"SESSION_MEMORY.md"})
+
 
 def _iter_workspace_files(workspace_root: str) -> List[str]:
     """递归列举工作区内所有普通文件（相对路径，正斜杠）。"""
@@ -10,6 +13,8 @@ def _iter_workspace_files(workspace_root: str) -> List[str]:
     for dirpath, _dirnames, filenames in os.walk(workspace_root):
         for name in filenames:
             if name.startswith("."):
+                continue
+            if name in _SKIP_FILENAMES:
                 continue
             abs_fp = os.path.join(dirpath, name)
             rel = os.path.relpath(abs_fp, workspace_root).replace(os.sep, "/")

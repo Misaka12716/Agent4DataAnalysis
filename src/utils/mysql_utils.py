@@ -1,6 +1,7 @@
 # mysql_utils.py
 # MySQL数据库操作封装，提供连接管理和基本CRUD功能
 
+import re
 import threading
 
 import pymysql  # pyright: ignore[reportMissingModuleSource]
@@ -211,6 +212,20 @@ class MySQLHandler:
                 except pymysql.MySQLError as retry_err:
                     print(f"检查表 {table_name} 存在性失败: {retry_err}")
                     return False
+
+    def get_table_columns(self, table_name: str) -> set:
+        """返回表的列名集合（MySQL SHOW COLUMNS；兼容 Field / name）。"""
+        if not table_name or not re.match(r"^[A-Za-z0-9_]+$", table_name):
+            return set()
+        rows, err = self.query(f"SHOW COLUMNS FROM `{table_name}`")
+        if err or not rows:
+            return set()
+        cols = set()
+        for r in rows:
+            name = r.get("Field") or r.get("name")
+            if name:
+                cols.add(str(name))
+        return cols
 
 try:
     mysql_handler = MySQLHandler(

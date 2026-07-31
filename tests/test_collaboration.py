@@ -64,6 +64,8 @@ def mock_users():
     def _get_by_phone(phone):
         if phone == "13800138001":
             return collaborator, None
+        if phone == "13800138000":
+            return owner, None
         return None, None
 
     with patch("db.rbac_store.RbacStore.get_user", side_effect=_get_user), patch(
@@ -151,6 +153,21 @@ def test_add_member_by_phone(client, owner_headers, mock_users):
         )
     assert r.status_code == 201
     assert r.json()["data"]["user_id"] == 20
+
+
+def test_add_member_rejects_project_owner(client, owner_headers, mock_users):
+    with patch("backend.member_routes.assert_member_manage_access"):
+        r = client.post(
+            "/project/1/members",
+            headers=owner_headers,
+            json={
+                "phone": "13800138000",
+                "role": "member",
+                "permissions": ["data_download"],
+            },
+        )
+    assert r.status_code == 400
+    assert "创建者" in r.json()["detail"]
 
 
 def test_member_can_list_members_readonly(client, member_headers, mock_users):

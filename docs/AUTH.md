@@ -43,7 +43,7 @@ sequenceDiagram
 
 - 配置：[`src/configs/config.py`](../src/configs/config.py)
 - 签发/解析：[`src/backend/jwt_auth.py`](../src/backend/jwt_auth.py)
-- 会话归属：[`src/backend/session_auth.py`](../src/backend/session_auth.py)
+- 会话归属：[`src/backend/project_auth.py`](../src/backend/project_auth.py)
 
 **生产环境必须设置 `JWT_SECRET_KEY`**，且不要使用代码仓库中的默认值。
 

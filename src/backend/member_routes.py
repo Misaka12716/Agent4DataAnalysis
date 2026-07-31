@@ -110,6 +110,17 @@ def register_member_routes(app) -> None:
         if not user:
             raise HTTPException(status_code=404, detail="用户不存在")
 
+        from db.project_store import ProjectStore
+
+        project_row, err = ProjectStore.get_project(project_id)
+        if err:
+            raise HTTPException(status_code=500, detail=err)
+        if not project_row:
+            raise HTTPException(status_code=404, detail="项目不存在")
+        owner_id = int(project_row.get("user_id") or 0)
+        if owner_id and target_user_id == owner_id:
+            raise HTTPException(status_code=400, detail="项目创建者已是所有者，无需添加为成员")
+
         perms = body.permissions if body.permissions else list(DEFAULT_MEMBER_PERMISSIONS)
         member_id, err = RbacStore.add_member(project_id, target_user_id, role, perms)
         if err:

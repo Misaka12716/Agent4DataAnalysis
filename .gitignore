@@ -62,8 +62,7 @@ input/
 temp_load/
 tools/
 abolished/
-2.1.5-template-fusion/
-2.1.6-clinical-fusion/
+software1_handoff/
 
 # CubeSandbox-specific ignore rules (scoped to avoid affecting other modules)
 /CubeSandbox/**/target/

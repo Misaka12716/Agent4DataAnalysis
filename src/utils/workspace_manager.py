@@ -138,45 +138,21 @@ def init_workspace(
 
 def generate_data_filename(workspace_abs: str, original_filename: str) -> str:
     """
-    根据工作区已有文件，生成统一的数据文件名：
-    - 第一个文件：data.扩展名（如 data.xlsx）
-    - 后续文件：data_1.扩展名、data_2.扩展名，依此类推
+    为上传文件分配工作区文件名（薄包装，兼容旧调用点）。
 
-    仅基于文件扩展名进行区分，文件名部分统一为 data / data_N。
+    - 无同名冲突：保留清洗后的用户原名
+    - 有冲突：原名 (1).ext / 原名 (2).ext …
     """
-    # 提取原始扩展名（含点），若无扩展名则空字符串
-    _, ext = os.path.splitext(original_filename or "")
-    # 规范化扩展名为小写
-    ext = ext.lower()
+    from utils.upload_naming import allocate_unique_name_in_dir
 
-    # 已存在的同扩展名文件名集合，便于快速判断
-    try:
-        existing = {
-            name
-            for name in os.listdir(workspace_abs)
-            if os.path.isfile(os.path.join(workspace_abs, name))
-        }
-    except OSError:
-        existing = set()
-
-    # 优先使用 data.ext
-    base_name = f"data{ext}"
-    if base_name not in existing:
-        return base_name
-
-    # 否则从 data_1.ext 开始递增查找空位
-    index = 1
-    while True:
-        candidate = f"data_{index}{ext}"
-        if candidate not in existing:
-            return candidate
-        index += 1
+    return allocate_unique_name_in_dir(workspace_abs, original_filename).stored_name
 
 
 def list_workspace_files(session_id: str) -> list:
     """
     列出工作区根目录下所有文件的相对路径（不含子目录）。
     工作区不存在或非目录时返回空列表。
+    跳过 SESSION_MEMORY.md（由编排维护，勿注入 Coder/Reader 上下文以免自嵌套）。
     """
     root = resolve_workspace_root(session_id)
     if not root:
@@ -185,6 +161,7 @@ def list_workspace_files(session_id: str) -> list:
         return [
             name for name in os.listdir(root)
             if os.path.isfile(os.path.join(root, name))
+            and name != "SESSION_MEMORY.md"
         ]
     except OSError:
         return []

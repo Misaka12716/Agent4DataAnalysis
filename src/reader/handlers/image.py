@@ -14,19 +14,19 @@ from configs.config import (
 from configs.prompts import SYSTEM_PROMPT_READER_VISION
 
 
-def _vision_llm() -> Optional[ChatOpenAI]:
+def _ocr_llm() -> Optional[ChatOpenAI]:
     if not (DEFAULT_VISION_MODEL or "").strip():
         return None
     return ChatOpenAI(
         model=DEFAULT_VISION_MODEL.strip(),
-        temperature=0.2,
+        temperature=0.0,
         api_key=API_KEY,
         base_url=OPENAI_COMPATIBLE_API_BASE,
     )
 
 
-def _describe_image_with_vision(abs_path: str, lang: str) -> str:
-    llm = _vision_llm()
+def _recognize_image_with_ocr(abs_path: str, lang: str) -> str:
+    llm = _ocr_llm()
     if llm is None:
         return ""
     ext = os.path.splitext(abs_path)[1].lower().lstrip(".")
@@ -41,20 +41,21 @@ def _describe_image_with_vision(abs_path: str, lang: str) -> str:
     with open(abs_path, "rb") as f:
         b64 = base64.standard_b64encode(f.read()).decode("ascii")
     system = SYSTEM_PROMPT_READER_VISION.get(lang) or SYSTEM_PROMPT_READER_VISION.get("zh") or ""
+    # deepseek-ocr：先图后文
     msg = HumanMessage(
         content=[
-            {"type": "text", "text": system},
             {
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime};base64,{b64}"},
             },
+            {"type": "text", "text": system},
         ]
     )
     try:
         resp = llm.invoke([msg])
         return (resp.content or "").strip()
     except Exception as e:
-        return f"（Vision 分析失败: {e}）"
+        return f"（OCR 识别失败: {e}）" if lang == "zh" else f"(OCR failed: {e})"
 
 
 def digest_image_file(workspace_root: str, relative_path: str, lang: str = "zh") -> Dict[str, Any]:
@@ -76,7 +77,7 @@ def digest_image_file(workspace_root: str, relative_path: str, lang: str = "zh")
         entry["error"] = str(e)
         return entry
 
-    desc = _describe_image_with_vision(fp, lang)
+    desc = _recognize_image_with_ocr(fp, lang)
     if desc:
         entry["vision_description"] = desc
     else:

@@ -49,7 +49,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 import pandas as pd
 from lifelines import CoxPHFitter, KaplanMeierFitter
-from lifelines.statistics import logrank_test, proportional_hazard_test
+from lifelines.statistics import logrank_test
 
 from ..contract import ColumnMapping, Role, RoleSpec, SolverContract
 
@@ -155,32 +155,6 @@ class CoxRegressionSolver:
                                event_observed_B=g1[e_col])
             log_rank_p = float(res.p_value)
 
-        ph_test = None
-        ph_min_p = None
-        try:
-            ph = proportional_hazard_test(cph, cph_input, time_transform="rank")
-            ph_rows = {
-                str(idx): {
-                    "test_statistic": float(row["test_statistic"]),
-                    "p_value": float(row["p"]),
-                }
-                for idx, row in ph.summary.iterrows()
-            }
-            vals = [v["p_value"] for v in ph_rows.values()]
-            ph_min_p = min(vals) if vals else None
-            ph_test = {
-                "method": "lifelines proportional_hazard_test(rank)",
-                "per_covariate": ph_rows,
-                "min_p_value": ph_min_p,
-                "passes_0_05": (ph_min_p is None) or ph_min_p >= 0.05,
-            }
-        except Exception as exc:
-            ph_test = {
-                "method": "lifelines proportional_hazard_test(rank)",
-                "error": f"{type(exc).__name__}: {exc}",
-                "passes_0_05": None,
-            }
-
         # HR 方向（"+"/"-"）方便下游和"先验方向"做断言：
         # 例如临床先验"年龄越大风险越高" → 期望 age 的 sign = "+"
         signs = {row["covariate"]: ("+" if row["hazard_ratio"] > 1 else "-")
@@ -196,10 +170,6 @@ class CoxRegressionSolver:
             # `compare_json_with_assertions` can verify directly:
             "expected_signs":  signs,
             "expected_log_rank_p": log_rank_p,
-            "proportional_hazards_test": ph_test,
-            "ph_min_p_value": ph_min_p,
-            "ph_assumption_ok": (
-                None if ph_min_p is None else bool(ph_min_p >= 0.05)),
         }
         mj = Path(output_dir) / CONTRACT.output_files["metrics_json"]
         mj.write_text(__import__("json").dumps(metrics, ensure_ascii=False,
