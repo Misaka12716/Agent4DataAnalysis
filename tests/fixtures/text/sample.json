@@ -1,0 +1,11 @@
+{
+  "name": "sample",
+  "version": 1,
+  "tags": [
+    "text",
+    "fixture"
+  ],
+  "meta": {
+    "source": "generate_text_format_fixtures"
+  }
+}

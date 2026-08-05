@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.jwt_auth import CurrentUser, get_current_user
 
 logger = logging.getLogger(__name__)
+
+
+def _web_psych_dir() -> Path:
+    # src/backend/psych_routes.py → src/frontend/web/psych
+    here = Path(__file__).resolve().parent
+    return (here.parent / "frontend" / "web" / "psych").resolve()
 
 
 def _ok(data, status: int = 200) -> JSONResponse:
@@ -173,12 +181,6 @@ class CapUpdateBody(BaseModel):
 class CapComposeBody(BaseModel):
     capability_ids: List[str]
     name: Optional[str] = None
-
-
-class CapUpgradeBody(BaseModel):
-    capability_id: str
-    to_ver: str
-    note: Optional[str] = None
 
 
 class DlTrainBody(BaseModel):
@@ -364,6 +366,7 @@ def register_psych_routes(app) -> None:
         patient_key_col: Optional[str] = Form(None),
         current_user: CurrentUser = Depends(get_current_user),
     ):
+        from backend.chunked_upload_finalize import attach_deprecated_fields
         from backend.psych_data_service import ingest_file
 
         content = await file.read()
@@ -379,7 +382,10 @@ def register_psych_routes(app) -> None:
         )
         if err:
             _err(err)
-        return _ok(data, 201)
+        return JSONResponse(
+            content=attach_deprecated_fields({"status": "success", "data": data}),
+            status_code=201,
+        )
 
     @app.get("/psych/datasets/{dataset_id}/preview")
     async def psych_preview(dataset_id: int, n_rows: int = 20, current_user: CurrentUser = Depends(get_current_user)):
@@ -659,6 +665,24 @@ def register_psych_routes(app) -> None:
             _err(err, 404 if "不存在" in err else 400)
         return _ok(row)
 
+    @app.get("/psych/features/{feat_id}/download")
+    async def psych_download_feat(
+        feat_id: int,
+        format: str = "csv",
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        from backend.psych_feature_service import download_feature
+
+        data, err = download_feature(feat_id, current_user.user_id, fmt=format)
+        if err:
+            _err(err, 404 if "不存在" in err else 400)
+        assert data is not None
+        return FileResponse(
+            data["file_path"],
+            filename=data["filename"],
+            media_type=data.get("media_type"),
+        )
+
     # ---- module 11 scales ----
     @app.get("/psych/scales/forms")
     async def psych_scale_forms(current_user: CurrentUser = Depends(get_current_user)):
@@ -782,7 +806,7 @@ def register_psych_routes(app) -> None:
             _err(err, 500)
         return _ok(data)
 
-    # ---- module 10+12 capabilities ----
+    # ---- module 10 capabilities ----
     @app.get("/psych/capabilities")
     async def psych_list_caps(kind: Optional[str] = None, current_user: CurrentUser = Depends(get_current_user)):
         from backend.psych_capability_service import list_caps
@@ -812,26 +836,6 @@ def register_psych_routes(app) -> None:
             _err(err)
         return _ok(data, 201)
 
-    @app.post("/psych/capabilities/upgrade")
-    async def psych_upgrade(body: CapUpgradeBody, current_user: CurrentUser = Depends(get_current_user)):
-        from backend.psych_capability_service import upgrade
-
-        data, err = upgrade(body.capability_id, body.to_ver, body.note)
-        if err:
-            _err(err)
-        return _ok(data)
-
-    @app.get("/psych/capabilities/changelog")
-    async def psych_changelog(
-        capability_id: Optional[str] = None, current_user: CurrentUser = Depends(get_current_user)
-    ):
-        from backend.psych_capability_service import list_changelog
-
-        rows, err = list_changelog(capability_id)
-        if err:
-            _err(err, 500)
-        return _ok({"changelog": rows})
-
     # ---- module 9 dl ----
     @app.get("/psych/dl/models")
     async def psych_dl_models(current_user: CurrentUser = Depends(get_current_user)):
@@ -856,5 +860,16 @@ def register_psych_routes(app) -> None:
         if err:
             _err(err)
         return _ok(data)
+
+    # ---- 2.1.4 示意 Demo：/psych-app + /static/psych ----
+    psych_ui = _web_psych_dir()
+    if psych_ui.is_dir() and (psych_ui / "index.html").is_file():
+        app.mount("/static/psych", StaticFiles(directory=str(psych_ui)), name="psych_static")
+
+        @app.get("/psych-app", include_in_schema=False)
+        async def psych_app_page():
+            return FileResponse(psych_ui / "index.html", media_type="text/html")
+    else:
+        logger.warning("psych demo UI not found at %s", psych_ui)
 
     logger.info("psych routes registered")

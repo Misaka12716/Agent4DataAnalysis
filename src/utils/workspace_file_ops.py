@@ -72,3 +72,10 @@ def write_bytes_file(session_id: str, relative_path: str, data: bytes) -> bool:
     if not is_safe_relative_path(relative_path):
         return False
     return ensure_runtime(session_id).files.write(relative_path, data) is not None
+
+
+def delete_file(session_id: str, relative_path: str) -> bool:
+    """删除工作区内的普通文件（相对路径）；路径不安全或不存在时返回 False。"""
+    if not is_safe_relative_path(relative_path):
+        return False
+    return bool(ensure_runtime(session_id).files.delete(relative_path))

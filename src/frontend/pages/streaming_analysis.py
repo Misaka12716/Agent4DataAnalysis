@@ -137,7 +137,8 @@ def render_streaming_analysis_page(api_base: str, session_id: str) -> None:
         with st.container(border=True):
             st.markdown("### 上传文件")
             st.caption(
-                "支持表格（xlsx / xls / csv / tsv）、图片、文本等。可多选批量上传。"
+                "支持表格（xlsx / xls / csv / tsv）、文本（txt / md / json / yaml / xml / html / log）、"
+                "文档（pdf / docx）、图片、医学影像（dcm / dicom）。可多选批量上传。"
             )
             uploaded_list = st.file_uploader(
                 "选择文件（可多选）",

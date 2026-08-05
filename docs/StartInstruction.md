@@ -113,7 +113,7 @@ bash scripts/stop.sh --all        # 后端 + 联调前端
 | [`scripts/stop.sh`](../scripts/stop.sh) | 停止服务（`--all` 含前端） |
 | [`scripts/status.sh`](../scripts/status.sh) | 进程与健康检查 |
 
-日志目录：`tmp/logs/`（`backend.log`、`frontend.log`）。
+日志目录：`tmp/logs/`（进程日志 `backend.log`、`frontend.log`；会话/LLM 调试日志在 `tmp/logs/sessions/<session_id>.log`）。
 
 健康检查：
 
@@ -130,8 +130,18 @@ curl http://localhost:52716/health
 | 分析入口 | 「模板分析」页选模板跑分析；「流式分析」页跑 LLM SSE |
 | 正式前端 | 按 [`TemplateAPI.md`](TemplateAPI.md) 对接 HTTP；Streamlit 不是产品前端 |
 | 个人资源管理 | 原生 HTML：`http://<主机>:52716/resources/ui`（`/static/resources`）；API 见 [`ResourceAPI.md`](ResourceAPI.md) |
+| 2.1.4 多维度分析 | 原生 HTML：`http://<主机>:52716/psych-app`（`/static/psych`）；API 见 [`PsychAPI.md`](PsychAPI.md)、[`2.1.4FrontendIntegration.md`](2.1.4FrontendIntegration.md) |
 
-**演示数据**：运行 `bash scripts/init-platform.sh` 后位于 `tests/fixtures/`（横截面 baseline 样本 + 纵向随访样本）
+**演示数据**：运行 `bash scripts/init-platform.sh` 后位于 `tests/fixtures/`（横截面 baseline 样本 + 纵向随访样本）。另有按 Reader 分类的上传/解析样例：
+
+| 路径 | 用途 |
+|------|------|
+| [`tests/fixtures/table/mixed-types.csv`](../tests/fixtures/table/mixed-types.csv) | 混合类型表格（~500 行） |
+| [`tests/fixtures/table/large-dataset.csv`](../tests/fixtures/table/large-dataset.csv) | 大 CSV（~10MB）；建议用分片上传联调 |
+| [`tests/fixtures/imaging/患者CT.dcm`](../tests/fixtures/imaging/患者CT.dcm) | DICOM CT（~12MB，中文文件名）；测 imaging 白名单与 Reader |
+| [`tests/fixtures/text/`](../tests/fixtures/text/) | 文本七格式样例（`.txt` `.md` `.json` `.yaml` `.xml` `.html` `.log`）；测 text 白名单与 Reader preview |
+
+**对话数据分析实验素材**：外部导入文件放在 `tests/fixtures/conversation_analysis/cases/`（约定见该目录 `README.md`）；对比脚本为 `scripts/run_conversation_analysis_experiment.py`（详见 [`Tests.md`](Tests.md) §6）。
 
 模板 API 详见 [`TemplateAPI.md`](TemplateAPI.md)。个人资源管理 API 详见 [`ResourceAPI.md`](ResourceAPI.md)。
 
@@ -141,6 +151,8 @@ curl http://localhost:52716/health
 
 - 个人资源管理 API：[`ResourceAPI.md`](ResourceAPI.md)
 - 模板分析 API：[`TemplateAPI.md`](TemplateAPI.md)
+- 2.1.4 多维度分析 API：[`PsychAPI.md`](PsychAPI.md)
+- 2.1.4 联调 Demo：[`2.1.4FrontendIntegration.md`](2.1.4FrontendIntegration.md)（`/psych-app`）
 - Cube Sandbox 部署：[`Cubesandbox-deploy.md`](Cubesandbox-deploy.md)
 - 与 AgentPlatform 集成：[`Cubesandbox-agent-integration.md`](Cubesandbox-agent-integration.md)
 - 后端 API：[`BackendAPI.md`](BackendAPI.md)

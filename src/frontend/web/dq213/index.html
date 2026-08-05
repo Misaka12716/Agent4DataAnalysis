@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="agent-api-base" content="" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; connect-src 'self'; object-src 'none'; base-uri 'none'" />
+  <title>2.1.3 数据质量控制可视化</title>
+  <link rel="stylesheet" href="/static/dq213/styles.css?v=3" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>2.1.3 数据质量控制可视化</h1>
+      <p class="sub">自动化数据质控 · 敏感信息匿名化 · 患者诊疗轨迹时序全景</p>
+    </div>
+    <div id="login-status" class="status warn">未登录</div>
+  </header>
+
+  <section class="toolbar" aria-label="登录联调">
+    <label>手机号<input id="login-phone" placeholder="正式手机号" autocomplete="username" /></label>
+    <label>验证码<input id="login-code" placeholder="短信验证码" autocomplete="one-time-code" /></label>
+    <button type="button" id="btn-login" class="primary">登录并联调</button>
+    <span class="hint">已有主系统 agent_access_token 会自动复用；正式环境请走短信登录流程。</span>
+  </section>
+
+  <nav class="tabs" aria-label="功能模块">
+    <button type="button" class="active" data-tab="qc">① 质量评估</button>
+    <button type="button" data-tab="phi">② 脱敏匿名化</button>
+    <button type="button" data-tab="timeline">③ 诊疗轨迹</button>
+  </nav>
+
+  <main>
+    <section class="panel" id="tab-qc">
+      <div class="row">
+        <label>数据来源
+          <select id="qc-source">
+            <option value="inline">综合严苛样例（结构化+文本+多模态）</option>
+            <option value="database">当前用户隔离数据库</option>
+          </select>
+        </label>
+        <button type="button" id="btn-qc" class="primary">运行自动化质控评估</button>
+        <button type="button" id="btn-report" class="hidden">下载质控报告</button>
+      </div>
+      <p class="hint">评估完整性、一致性、准确性、IQR 异常值、非结构化文本、多模态元数据和临床多类型覆盖。</p>
+      <div class="metrics metrics-six">
+        <div class="metric"><div class="val" id="m-health">—</div><div class="lbl">健康分</div></div>
+        <div class="metric"><div class="val" id="m-miss">—</div><div class="lbl">缺失率</div></div>
+        <div class="metric"><div class="val" id="m-anom">—</div><div class="lbl">字段异常率</div></div>
+        <div class="metric"><div class="val" id="m-out">—</div><div class="lbl">异常值率</div></div>
+        <div class="metric"><div class="val" id="m-text">—</div><div class="lbl">文本问题率</div></div>
+        <div class="metric"><div class="val" id="m-media">—</div><div class="lbl">多模态问题率</div></div>
+      </div>
+      <h2>维度得分</h2>
+      <div class="bars" id="dim-bars"></div>
+      <h2>字段异常率 Top</h2>
+      <div class="bars" id="field-bars"></div>
+    </section>
+
+    <section class="panel hidden" id="tab-phi">
+      <div class="row">
+        <label>输入类型
+          <select id="phi-kind">
+            <option value="text">非结构化医疗文本</option>
+            <option value="rows">结构化患者数据 JSON</option>
+          </select>
+        </label>
+        <label>处理模式
+          <select id="phi-mode">
+            <option value="replace">替换标签</option>
+            <option value="annotate">识别并标注</option>
+            <option value="redact">涂黑</option>
+          </select>
+        </label>
+        <button type="button" id="btn-phi-demo">加载文本样例</button>
+        <button type="button" id="btn-phi-rows-demo">加载结构化样例</button>
+        <button type="button" id="btn-phi-run" class="primary">识别并处理</button>
+      </div>
+      <p class="hint">结构化患者编号使用服务端 HMAC 密钥生成不可逆伪名；客户端不能传入密钥。标注模式会保留原始隐私值，仅适合人工复核。</p>
+      <div class="split">
+        <label>待处理内容
+          <textarea id="phi-input" rows="13">患者张伟，身份证110101199001011234，手机13812345678，住址北京市海淀区某某路1号。诊断精神分裂症，奥氮平10mg。病案号：ZY20260001。</textarea>
+        </label>
+        <div>
+          <div class="hint">处理结果</div>
+          <pre class="box" id="phi-output">等待操作…</pre>
+          <div class="hint" id="phi-meta"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel hidden" id="tab-timeline">
+      <div class="row">
+        <label class="grow">患者<select id="tl-patient"></select></label>
+        <label>开始日期<input type="date" id="tl-start" /></label>
+        <label>结束日期<input type="date" id="tl-end" /></label>
+        <label>模态
+          <select id="tl-modality">
+            <option value="">全部</option>
+            <option value="image">影像</option>
+            <option value="document">文档</option>
+            <option value="text">文本</option>
+            <option value="scale">量表</option>
+            <option value="lab">检验</option>
+            <option value="structured">结构化</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label class="grow">关键词<input id="tl-keyword" placeholder="诊断、药品、检查结论、随访内容" /></label>
+        <button type="button" id="btn-tl-refresh">刷新患者</button>
+        <button type="button" id="btn-tl-load" class="primary">交互式查询轨迹</button>
+      </div>
+      <div class="filter-grid" id="tl-filters"></div>
+      <div class="metrics metrics-five">
+        <div class="metric"><div class="val" id="tl-n">—</div><div class="lbl">事件数</div></div>
+        <div class="metric"><div class="val" id="tl-types">—</div><div class="lbl">事件类型</div></div>
+        <div class="metric"><div class="val" id="tl-mod">—</div><div class="lbl">数据模态</div></div>
+        <div class="metric"><div class="val" id="tl-assets">—</div><div class="lbl">联动附件</div></div>
+        <div class="metric"><div class="val" id="tl-pid">—</div><div class="lbl">患者</div></div>
+      </div>
+      <div class="timeline" id="tl-list" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <pre id="log" class="log">日志…</pre>
+  <script src="/static/dq213/app.js?v=3"></script>
+</body>
+</html>

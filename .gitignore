@@ -54,6 +54,15 @@ template_runs/
 htmlcov/
 coverage.xml
 
+# Conversation analysis experiment: ignore imported case data & run outputs,
+# but keep directory scaffolding, examples, prompts, and results/.gitkeep
+tests/fixtures/conversation_analysis/cases/**
+!tests/fixtures/conversation_analysis/cases/**/
+!tests/fixtures/conversation_analysis/cases/**/*.example
+!tests/fixtures/conversation_analysis/cases/**/README.md
+tests/fixtures/conversation_analysis/results/**
+!tests/fixtures/conversation_analysis/results/.gitkeep
+
 # Jupyter
 .ipynb_checkpoints/
 

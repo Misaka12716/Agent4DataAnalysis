@@ -52,6 +52,9 @@ ollama list
 # 通用文本（Planner / Supervisor / Reader / Reporter / 临床等）
 ollama pull glm-4.7-flash:q4_K_M
 
+# Supervisor / Orchestrator 路由
+ollama pull qwen2.5:7b
+
 # 代码生成 / 失败修正
 ollama pull qwen3-coder:30b
 
@@ -89,29 +92,31 @@ curl -s http://192.168.4.110:12716/v1/chat/completions \
 
 | 模型 ID | 状态 | 用途 |
 |---|---|---|
-| `glm-4.7-flash:q4_K_M` | 已部署 | **通用文本**（Planner / Orchestrator / Reader / Reporter / 临床） |
-| `qwen3-coder:30b` | 已部署 | **Coder 专用**（代码生成、失败修正） |
+| `glm-4.7-flash:q4_K_M` | 已部署 | 通用文本（长期推荐；当前临时未用） |
+| `qwen3-coder:30b` | 已部署 | Coder 专用（长期推荐；当前临时未用） |
 | `deepseek-ocr:latest` | 已部署 | **OCR / 图片文字识别**（Reader Vision） |
+| `qwen2.5:7b` | 已部署 | **临时统一文本模型**（Planner / Supervisor / Coder / Reader / Reporter / 临床） |
 | `qwen3.6:27b` | 已部署 | 多模态备用 |
 | `qwen2.5:14b` | 已部署 | 轻量备用 |
-| `qwen2.5:7b` | 已部署 | 历史备用 |
 
 ---
 
 ## 3. 模型分工策略
 
-采用**三模型**策略：通用文本用较轻量的 `glm-4.7-flash:q4_K_M` 降低延迟；代码生成/修正固定用 `qwen3-coder:30b`；图片先由 OCR 模型识别文字，识别结果写入 digest 后再交给通用模型分析。
+采用**三模型**策略（长期推荐）：通用文本用较轻量的 `glm-4.7-flash:q4_K_M`；代码生成/修正用 `qwen3-coder:30b`；图片用 `deepseek-ocr:latest`。
+
+**当前临时部署**：除 OCR / 多模态外，文本角色统一为 `qwen2.5:7b`（见 `.env`）。
 
 | 角色 | 推荐模型 | 说明 |
 |---|---|---|
-| **Coder**（代码生成、失败修正） | `qwen3-coder:30b` | 固定使用 `DEFAULT_CODER_MODEL` |
-| **Planner**（需求解析、步骤分解） | `glm-4.7-flash:q4_K_M` | 流式 LLM，使用 `DEFAULT_MODEL` |
-| **Orchestrator / Supervisor**（路由决策） | `glm-4.7-flash:q4_K_M` | 可用 `DEFAULT_ORCHESTRATOR_MODEL` 覆盖（默认跟随 `DEFAULT_MODEL`） |
-| **Reader**（工作区摘要压缩） | `glm-4.7-flash:q4_K_M` | `DEFAULT_READER_MODEL`（默认跟随 `DEFAULT_MODEL`） |
-| **Reader Vision**（OCR / 图片文字识别） | `deepseek-ocr:latest` | `DEFAULT_VISION_MODEL`，经 `image_url` 识别后写入 `vision_description` |
-| **Reporter**（最终报告） | `glm-4.7-flash:q4_K_M` | 使用 `DEFAULT_MODEL` |
-| **Reader 表头 LLM**（可选） | `glm-4.7-flash:q4_K_M` | 仅当 `READER_ENABLE_LLM_TABLE_HEADER=1` |
-| **临床映射 / 临床报告** | `glm-4.7-flash:q4_K_M` | `LLM_MODEL` / `CLINICAL_REPORT_MODEL`（默认跟随 `DEFAULT_MODEL`） |
+| **Coder**（代码生成、失败修正） | `qwen2.5:7b`（临时） | `DEFAULT_CODER_MODEL`；长期推荐 `qwen3-coder:30b` |
+| **Planner**（需求解析、步骤分解） | `qwen2.5:7b`（临时） | `DEFAULT_MODEL`；长期推荐 `glm-4.7-flash:q4_K_M` |
+| **Orchestrator / Supervisor**（路由决策） | `qwen2.5:7b` | `DEFAULT_ORCHESTRATOR_MODEL` |
+| **Reader**（工作区摘要压缩） | `qwen2.5:7b`（临时） | `DEFAULT_READER_MODEL` |
+| **Reader Vision**（OCR / 图片文字识别） | `deepseek-ocr:latest` | `DEFAULT_VISION_MODEL`（不变） |
+| **Reporter**（最终报告） | `qwen2.5:7b`（临时） | `DEFAULT_MODEL` |
+| **Reader 表头 LLM**（可选） | `qwen2.5:7b`（临时） | 仅当 `READER_ENABLE_LLM_TABLE_HEADER=1` |
+| **临床映射 / 临床报告** | `qwen2.5:7b`（临时） | `LLM_MODEL` / `CLINICAL_REPORT_MODEL` |
 | **Worker 执行** | 不调用 LLM | Cube Sandbox 内执行用户代码；与 Coder 模型无关，但依赖沙箱模板中的 Python 环境（见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md)） |
 
 ### 3.1 代码中的调用点
@@ -127,9 +132,11 @@ curl -s http://192.168.4.110:12716/v1/chat/completions \
 | Reporter | `src/reporter/report_agent.py` | `DEFAULT_MODEL` |
 | Worker 执行 | `src/worker/workspace_worker.py` | 不调用 LLM；Cube Sandbox 内执行用户代码（`sandbox.commands.run`），依赖沙箱模板中的 Python 环境，见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md) |
 
-### 3.2 Supervisor 与 Qwen 系列的兼容性
+### 3.2 Supervisor 与 json_schema 兼容性
 
-`qwen` 系列在部分 OpenAI 兼容网关上**不支持** `response_format=json_schema`。编排层已对模型名包含 `qwen` 等情况跳过 json_schema，优先 `function_calling` 与原始 JSON 解析回退（见 `analysis_pipeline_graph.py` 中 `_should_try_json_schema_method`）。若将 `DEFAULT_ORCHESTRATOR_MODEL` 覆盖为 qwen，该逻辑会自动生效；部署新模型后一般无需改此逻辑。
+多数本地 / OpenAI 兼容网关（含默认的 `glm-4.7-flash`、`qwen` 等）**不支持** `response_format=json_schema`，会返回 500（如 `failed to load model vocabulary required for format`）。
+
+编排层采用**白名单**：仅当模型名以 `gpt-` / `o1-` / `o3-` / `o4-` / `chatgpt-` 开头时才尝试 json_schema；其它模型（含默认 Orchestrator）只走 `function_calling` 与原始 JSON 解析回退（见 `analysis_pipeline_graph.py` 中 `_should_try_json_schema_method`）。
 
 ---
 
@@ -146,7 +153,7 @@ VISION_MODEL = "deepseek-ocr:latest"  # OCR / 图片文字识别
 
 DEFAULT_MODEL = "glm-4.7-flash:q4_K_M"   # Planner / Reporter / 表头 LLM 等
 DEFAULT_CODER_MODEL = "qwen3-coder:30b"
-DEFAULT_ORCHESTRATOR_MODEL = "glm-4.7-flash:q4_K_M"   # 默认与 DEFAULT_MODEL 相同
+DEFAULT_ORCHESTRATOR_MODEL = DEFAULT_MODEL   # 无 env 时跟随 DEFAULT_MODEL；部署常用 .env 覆盖为 qwen2.5:7b
 DEFAULT_READER_MODEL = "glm-4.7-flash:q4_K_M"         # 默认与 DEFAULT_MODEL 相同
 DEFAULT_VISION_MODEL = "deepseek-ocr:latest"
 CLINICAL_REPORT_MODEL = "glm-4.7-flash:q4_K_M"        # 默认与 DEFAULT_MODEL 相同
@@ -158,21 +165,23 @@ OPENAI_API_KEY = ""                 # 本地 Ollama 可用 ollama；空字符串
 
 `DEFAULT_ORCHESTRATOR_MODEL` / `DEFAULT_READER_MODEL` / `CLINICAL_REPORT_MODEL` 在代码中默认跟随 `DEFAULT_MODEL`（`os.getenv(..., DEFAULT_MODEL)`）。
 
-### 4.2 `.env` 推荐配置（三模型）
+### 4.2 `.env` 当前临时配置（文本统一 qwen2.5:7b）
 
 ```bash
 OPENAI_API_KEY=ollama
 OPENAI_API_BASE=http://192.168.4.110:12716/v1
-LLM_MODEL=glm-4.7-flash:q4_K_M
-DEFAULT_MODEL=glm-4.7-flash:q4_K_M
+LLM_MODEL=qwen2.5:7b
+DEFAULT_MODEL=qwen2.5:7b
+DEFAULT_ORCHESTRATOR_MODEL=qwen2.5:7b
+DEFAULT_CODER_MODEL=qwen2.5:7b
+DEFAULT_READER_MODEL=qwen2.5:7b
 DEFAULT_VISION_MODEL=deepseek-ocr:latest
-DEFAULT_CODER_MODEL=qwen3-coder:30b
-CLINICAL_REPORT_MODEL=glm-4.7-flash:q4_K_M
+CLINICAL_REPORT_MODEL=qwen2.5:7b
 ```
 
 兼容别名（可选，一般不必再写）：`API_KEY`、`OPENAI_COMPATIBLE_API_BASE`。业务代码仍可通过 `from configs.config import API_KEY, OPENAI_COMPATIBLE_API_BASE` 使用，二者由上述主键解析。
 
-若 `.env` 仍写 `DEFAULT_MODEL=qwen3-coder:30b`（或把临床/Reader 一并覆盖为 Coder 模型），会覆盖代码默认，通用链路无法享受较轻量 glm 的延迟收益。
+恢复三模型分工时，将文本相关项改回 `glm-4.7-flash:q4_K_M` / `qwen3-coder:30b`，并保留 `DEFAULT_VISION_MODEL=deepseek-ocr:latest`。
 
 ### 4.3 其他与模型相关的环境变量
 
@@ -198,8 +207,9 @@ CLINICAL_REPORT_MODEL=glm-4.7-flash:q4_K_M
 ### 5.1 LLM 调用日志
 
 - 开关：`ENABLE_MODEL_LOG = True`（`config.py`）
-- 目录：`{TEMP_FOLDER}/logs/<session_id>.log`
+- 目录：`{TEMP_FOLDER}/logs/sessions/<session_id>.log`（与 `backend.log` / `frontend.log` 分目录）
 - 实现：`src/utils/model_logger.py`（阶段开始/结束、LLM 输入输出等）
+- 用途：排障分析管线 / LLM 调用；日常运维可只看 `tmp/logs/backend.log`。不需要时可关 `ENABLE_MODEL_LOG`，旧会话日志可删。
 
 ### 5.2 常见问题
 
@@ -207,7 +217,7 @@ CLINICAL_REPORT_MODEL=glm-4.7-flash:q4_K_M
 |---|---|---|
 | 流式分析无输出 / 500 | API 地址不可达或模型未 pull | 检查 `.env` 中 `OPENAI_API_BASE`、`curl /v1/models` |
 | `model not found` | 名称与 Ollama 不一致或未 pull | 容器内 `ollama list`，对齐 `.env` / 环境变量 |
-| Supervisor 决策异常 | 模型过载或 JSON 解析失败 | 查 session 日志；确认 `DEFAULT_ORCHESTRATOR_MODEL`（默认 `glm-4.7-flash:q4_K_M`）已部署且稳定 |
+| Supervisor 决策异常 | 模型过载或 JSON 解析失败 | 查 session 日志；确认 `DEFAULT_ORCHESTRATOR_MODEL`（当前 `qwen2.5:7b`）已 pull 且稳定。本地模型若仍见 `structured_output(json_schema)` / vocabulary 500，确认已用白名单逻辑（§3.2）并重启后端 |
 | 图片仅有元数据、无识别文本 | `DEFAULT_VISION_MODEL` 为空或模型不可用 | 确认默认为 `deepseek-ocr:latest` 且 `/v1/models` 可访问 |
 | OCR / Vision 调用失败 | 模型不支持 `image_url` 或图片过大 | 确认 `deepseek-ocr:latest` 已部署，或缩小图片后重试 |
 
@@ -221,4 +231,4 @@ CLINICAL_REPORT_MODEL=glm-4.7-flash:q4_K_M
 | 2026-05-25 | `qwen3.6:27b` 上线：通用链路默认切换为 `qwen3.6:27b`，Vision 默认同模型 |
 | 2026-07-18 | 通用文本默认改为 `qwen3-coder:30b`；`qwen3.6:27b` 仅用于 Vision；临床链路同步切本地 Ollama |
 | 2026-07-18 | Reader Vision 切换为 `deepseek-ocr:latest`：图片 OCR 识别后文本再交通用模型分析 |
-| 2026-07-28 | 通用文本默认切到 `glm-4.7-flash:q4_K_M`；形成三模型分工（glm 通用 / qwen3-coder 写代码 / deepseek-ocr 识图） |
+| 2026-08-04 | 临时：文本链路（含 Coder/Supervisor/临床）统一为 `qwen2.5:7b`；OCR 仍为 `deepseek-ocr:latest` |

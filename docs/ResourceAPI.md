@@ -3,7 +3,7 @@
 > **读者**：产品前端 / 联调前端开发  
 > **后端**：AgentPlatform FastAPI，默认 `http://<host>:52716`  
 > **联调页**：`http://<host>:52716/resources/ui`（原生 HTML，仅供对照行为）  
-> **相关文档**：鉴权见 [`AUTH.md`](AUTH.md)；项目与会话见 [`2.1.1FrontendIntegrationGuide.md`](2.1.1FrontendIntegrationGuide.md)
+> **相关文档**：鉴权见 [`AUTH.md`](AUTH.md)；项目与会话见 [`2.1.1FrontendIntegrationGuide.md`](2.1.1FrontendIntegrationGuide.md)；**大文件上传**请优先使用分片协议 [`ChunkedUploadFrontend.md`](ChunkedUploadFrontend.md)（`resources_file` / `resources_dataset` / `resources_dataset_version` / `resources_model`）。整文件 `multipart` 上传接口已 deprecated。
 
 本文档说明「个人资源管理」模块的业务含义、推荐页面流程，以及每个 API **做什么、何时调用、怎么调、返回什么**。  
 该模块与项目 RBAC **独立**：只按登录用户 `user_id` 隔离，不需要 `project_id` / 会话权限码。
@@ -223,6 +223,8 @@ sequenceDiagram
 ---
 
 ### 4.3 上传文件 — `POST /resources/files/upload`
+
+> **Deprecated（整文件）**：大文件请改用 [`ChunkedUploadFrontend.md`](ChunkedUploadFrontend.md)，`target=resources_file`。本接口仍可用，响应含 `deprecated: true`。
 
 **作用**：把文件写入当前用户文件空间，并**自动识别类型**写入 `category`。
 

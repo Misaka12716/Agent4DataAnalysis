@@ -105,6 +105,8 @@ resolve(path) → handler_id / category
 
 **依赖**：`openpyxl`（xlsx）、`xlrd`（xls）；缺失时读表失败并记入 `error`。
 
+**仓库样例**：`tests/fixtures/table/mixed-types.csv`、`tests/fixtures/table/large-dataset.csv`（首行可为 Sample-Files 风格注释；默认路径把第 0 行当表头，不按 `#` 跳过）。
+
 ---
 
 ### 4.2 图片（`image`）— `handlers/image.py`
@@ -172,6 +174,8 @@ resolve(path) → handler_id / category
 3. 提取 PatientID/Name、StudyDate、Modality、Study/Series Description、Rows/Columns
 
 **产出**：上述标签字段（字符串化）；不做像素级视觉描述
+
+**仓库样例**：`tests/fixtures/imaging/患者CT.dcm`（中文文件名；`stop_before_pixels` 只读标签）。
 
 ---
 

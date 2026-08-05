@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from typing import List, Optional
 
 from sandbox.config import META_FILENAME, SANDBOX_LIST_DEPTH, SANDBOX_WORKDIR
@@ -113,6 +114,54 @@ def read_text(session_id: str, relative_path: str) -> Optional[str]:
         return data.decode("utf-8")
     except UnicodeDecodeError:
         return data.decode("utf-8", errors="replace")
+
+
+def delete_file(session_id: str, relative_path: str) -> bool:
+    """从沙箱删除文件，并同步删除本地工作区镜像中的对应文件。"""
+    if not is_safe_relative_path(relative_path):
+        return False
+    rel = (relative_path or "").replace("\\", "/").lstrip("/")
+    remote = remote_path(rel)
+    try:
+        from sandbox.session_manager import ensure_sandbox, is_envd_reachable
+
+        ensure_sandbox(session_id)
+        if not is_envd_reachable(session_id):
+            return False
+        sandbox = get_sandbox(session_id)
+        removed = False
+        files_api = getattr(sandbox, "files", None)
+        remove_fn = getattr(files_api, "remove", None) if files_api is not None else None
+        if callable(remove_fn):
+            try:
+                remove_fn(remote)
+                removed = True
+            except Exception:
+                removed = False
+        if not removed:
+            # E2B / Cube 部分版本无 files.remove，回退为 shell rm
+            result = sandbox.commands.run(
+                f"rm -f -- {shlex.quote(remote)}",
+                cwd=SANDBOX_WORKDIR,
+            )
+            exit_code = getattr(result, "exit_code", None)
+            if exit_code is None:
+                exit_code = getattr(result, "returncode", 1)
+            removed = int(exit_code or 0) == 0
+        if not removed:
+            return False
+    except Exception:
+        return False
+
+    root = resolve_workspace_root(session_id)
+    if root:
+        local_abs = os.path.join(root, rel.replace("/", os.sep))
+        if os.path.isfile(local_abs):
+            try:
+                os.remove(local_abs)
+            except OSError:
+                pass
+    return True
 
 
 def sync_to_local(session_id: str) -> Optional[str]:

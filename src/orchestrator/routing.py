@@ -30,7 +30,7 @@ class SupervisorDecision(BaseModel):
 
 PipelineState = Dict[str, Any]
 
-_ANALYZABLE_FILE_TYPES = frozenset({"table", "image", "document", "imaging"})
+_ANALYZABLE_FILE_TYPES = frozenset({"table", "image", "text", "document", "imaging"})
 _ANALYZABLE_EXTENSIONS = frozenset(
     {
         ".xlsx",
@@ -43,6 +43,15 @@ _ANALYZABLE_EXTENSIONS = frozenset(
         ".gif",
         ".webp",
         ".bmp",
+        ".txt",
+        ".md",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".html",
+        ".htm",
+        ".log",
         ".pdf",
         ".docx",
         ".dcm",
@@ -51,17 +60,17 @@ _ANALYZABLE_EXTENSIONS = frozenset(
 )
 
 NO_ANALYZABLE_DATA_MSG_ZH = (
-    "工作区无可分析数据；本平台面向数据分析，请上传表格/文档/影像等后再试。"
+    "工作区无可分析数据；本平台面向数据分析，请上传表格/文本/文档/影像等后再试。"
 )
 NO_ANALYZABLE_DATA_MSG_EN = (
     "No analyzable data in the workspace; this platform targets data analysis. "
-    "Please upload tables/documents/imaging files and retry."
+    "Please upload tables/text/documents/imaging files and retry."
 )
 
 
 def has_analyzable_workspace(workspace_context: Optional[Dict[str, Any]]) -> bool:
     """
-    判断工作区是否存在可供分析的数据文件（表格/图片/文档/医学影像）。
+    判断工作区是否存在可供分析的数据文件（表格/图片/文本/文档/医学影像）。
     仅有 SESSION_MEMORY.md / main.py / 空目录视为无可分析数据。
     """
     if not workspace_context:
@@ -269,9 +278,9 @@ def supervisor_allowed_hint(state: PipelineState) -> str:
     ]
     if no_data and plan_ok and not rep_done:
         lines.append(
-            "No analyzable data files: choose reporter (explain that user must upload tables/documents); do not choose coder/worker."
+            "No analyzable data files: choose reporter (explain that user must upload tables/text/documents/imaging); do not choose coder/worker."
             if lang == "en"
-            else "工作区无可分析数据：应选择 reporter 说明需上传表格/文档等；勿选择 coder/worker。"
+            else "工作区无可分析数据：应选择 reporter 说明需上传表格/文本/文档/影像等；勿选择 coder/worker。"
         )
     if last == "coder" and code_ok and not no_data:
         lines.append("代码已写入/修正：应选择 worker 重新执行（勿再次进入 coder）。")

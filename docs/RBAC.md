@@ -64,7 +64,7 @@
 | 用户/平台 | JWT + `platform_role` + 封禁 | 未登录或封禁用户无法访问 API |
 | 项目 | 所有者 / 成员角色 / 权限码 | 非成员无法读取项目数据、资产与分析产出 |
 | 会话 | 创建者或项目成员 | 会话快照、工作区、流式分析均校验项目权限 |
-| 文件 | 路径 traversal 防护 + 权限码 | 下载/删除需对应 `data_download` / `data_delete` |
+| 文件 | 路径 traversal 防护 + 权限码 | 下载/删除需对应 `data_download` / `data_delete`（含项目资产与会话工作区文件） |
 
 **当前边界**：隔离止于项目级；CSV/Excel 中的 `patient_id` 列尚未建立独立患者实体或行级 ACL。患者级子集授权为后续规划项。
 
@@ -109,6 +109,7 @@
 |------|------|------|
 | GET | `/project/{id}/download?relative_path=` | `data_download` |
 | DELETE | `/project/{id}/assets` | `data_delete` |
+| DELETE | `/session/workspace-file` | `data_delete`（按 session.project_id） |
 | POST | `/project/{id}/tasks` | 按 task_type 映射 |
 | GET | `/project/{id}/tasks` | 项目读 |
 | GET | `/project/{id}/tasks/{task_id}` | 项目读 |

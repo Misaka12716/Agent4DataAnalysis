@@ -113,6 +113,7 @@ def register_resource_routes(app) -> None:
         parent_id: Optional[str] = Form(None),
         current_user: CurrentUser = Depends(get_current_user),
     ):
+        from backend.chunked_upload_finalize import attach_deprecated_fields
         from backend.resource_file_service import upload_file
 
         content = await file.read()
@@ -125,7 +126,10 @@ def register_resource_routes(app) -> None:
         )
         if err:
             _fail(err)
-        return _ok(data, 201)
+        return JSONResponse(
+            content=attach_deprecated_fields({"status": "success", "data": data}),
+            status_code=201,
+        )
 
     @app.get("/resources/files/{node_id}/download")
     async def files_download(
@@ -258,6 +262,7 @@ def register_resource_routes(app) -> None:
         description: Optional[str] = Form(None),
         current_user: CurrentUser = Depends(get_current_user),
     ):
+        from backend.chunked_upload_finalize import attach_deprecated_fields
         from backend.resource_dataset_service import create_from_upload
 
         content = await file.read()
@@ -270,7 +275,10 @@ def register_resource_routes(app) -> None:
         )
         if err:
             _fail(err)
-        return _ok(data, 201)
+        return JSONResponse(
+            content=attach_deprecated_fields({"status": "success", "data": data}),
+            status_code=201,
+        )
 
     @app.get("/resources/datasets/{dataset_id}")
     async def datasets_get(
@@ -315,6 +323,7 @@ def register_resource_routes(app) -> None:
         note: Optional[str] = Form(None),
         current_user: CurrentUser = Depends(get_current_user),
     ):
+        from backend.chunked_upload_finalize import attach_deprecated_fields
         from backend.resource_dataset_service import add_version
 
         content = await file.read()
@@ -327,7 +336,10 @@ def register_resource_routes(app) -> None:
         )
         if err:
             _fail(err)
-        return _ok(data, 201)
+        return JSONResponse(
+            content=attach_deprecated_fields({"status": "success", "data": data}),
+            status_code=201,
+        )
 
     @app.get("/resources/datasets/{dataset_id}/versions")
     async def datasets_list_versions(
@@ -432,6 +444,8 @@ def register_resource_routes(app) -> None:
             except Exception:
                 raise HTTPException(status_code=400, detail=f"无效 JSON: {raw[:80]}")
 
+        from backend.chunked_upload_finalize import attach_deprecated_fields
+
         content = await file.read()
         data, err = upload_model(
             current_user.user_id,
@@ -446,7 +460,10 @@ def register_resource_routes(app) -> None:
         )
         if err:
             _fail(err)
-        return _ok(data, 201)
+        return JSONResponse(
+            content=attach_deprecated_fields({"status": "success", "data": data}),
+            status_code=201,
+        )
 
     @app.get("/resources/models/{model_id}")
     async def models_get(

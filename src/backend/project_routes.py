@@ -187,18 +187,24 @@ def register_project_routes(app) -> None:
             file_category=file_category,
         )
 
+        from backend.chunked_upload_finalize import attach_deprecated_fields
+
         return JSONResponse(
-            content={
-                "status": "success",
-                "message": "文件已写入项目 raw 目录",
-                "deprecated": True,
-                "notice": "项目 raw/ 上传不会自动进入分析链路；请创建会话后使用 POST /session/copy-from-project-raw 或直接 POST /session/upload-excel 上传到会话工作区。",
-                "project_id": project_id,
-                "relative_path": relative_path,
-                "original_filename": client_original,
-                "renamed": allocated.renamed,
-                "file_category": file_category,
-            },
+            content=attach_deprecated_fields(
+                {
+                    "status": "success",
+                    "message": "文件已写入项目 raw 目录",
+                    "notice": (
+                        "项目 raw/ 上传不会自动进入分析链路；请创建会话后使用 "
+                        "POST /session/copy-from-project-raw 或分片上传 target=session。"
+                    ),
+                    "project_id": project_id,
+                    "relative_path": relative_path,
+                    "original_filename": client_original,
+                    "renamed": allocated.renamed,
+                    "file_category": file_category,
+                }
+            ),
             status_code=200,
         )
 

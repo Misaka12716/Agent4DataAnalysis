@@ -6,6 +6,7 @@ from typing import List, Literal, Optional
 from runtime.local.runtime import LocalRuntime
 from runtime.types import CommandResult, WriteInfo
 from sandbox.config import SANDBOX_WORKDIR
+from sandbox.files import delete_file as sandbox_delete_file
 from sandbox.files import list_files, remote_path, sync_to_local
 from sandbox.session_manager import ensure_sandbox, get_sandbox, pause_sandbox, try_ensure_sandbox
 from utils.workspace_manager import is_safe_relative_path, resolve_workspace_root
@@ -55,6 +56,21 @@ class SandboxFilesystem:
         try:
             return bool(self._sandbox().files.exists(remote_path(rel)))
         except Exception:
+            return False
+
+    def delete(self, path: str) -> bool:
+        rel = (path or "").replace("\\", "/").lstrip("/")
+        if not is_safe_relative_path(rel):
+            return False
+        try:
+            return bool(sandbox_delete_file(self._session_id, rel))
+        except Exception:
+            logger.debug(
+                "sandbox delete failed: session=%s path=%s",
+                self._session_id,
+                rel,
+                exc_info=True,
+            )
             return False
 
     def list(self, dir_path: str = ".", depth: int = 1) -> List[str]:

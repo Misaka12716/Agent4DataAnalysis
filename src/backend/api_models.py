@@ -37,6 +37,11 @@ class CopyProjectRawRequest(BaseModel):
     relative_paths: Optional[List[str]] = None
 
 
+class DeleteSessionFileRequest(BaseModel):
+    session_id: str
+    relative_path: str
+
+
 class SendSmsCodeRequest(BaseModel):
     phone: str
 

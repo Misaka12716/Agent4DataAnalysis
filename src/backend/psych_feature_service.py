@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -19,6 +20,13 @@ FEATURE_TYPES = {
     "ts": {"solver_id": "time_series_features", "name_zh": "时序特征"},
     "text": {"solver_id": "text_features", "name_zh": "文本语义特征"},
 }
+
+VALID_DOWNLOAD_FORMATS = ("csv", "json")
+
+
+def _safe_filename(name: str) -> str:
+    cleaned = re.sub(r"[^\w\u4e00-\u9fff\-]+", "_", (name or "").strip())
+    return cleaned.strip("_") or "features"
 
 
 def _stat_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -155,3 +163,49 @@ def get_feature(feat_id: int, user_id: int) -> Tuple[Optional[dict], Optional[st
     if not row:
         return None, f"特征集不存在: {feat_id}"
     return row, None
+
+
+def download_feature(
+    feat_id: int, user_id: int, fmt: str = "csv"
+) -> Tuple[Optional[dict], Optional[str]]:
+    """导出特征矩阵文件，供 FileResponse 下载。
+
+    返回 dict: file_path / filename / media_type；不改动挖掘结果原文件（csv 直出）。
+    """
+    fmt = (fmt or "csv").lower()
+    if fmt not in VALID_DOWNLOAD_FORMATS:
+        return None, f"format 无效，可选: {', '.join(VALID_DOWNLOAD_FORMATS)}"
+
+    row, err = get_feature(feat_id, user_id)
+    if err:
+        return None, err
+    assert row is not None
+
+    src = row.get("feature_matrix_path")
+    if not src or not Path(src).is_file():
+        return None, f"特征矩阵文件不存在: {feat_id}"
+
+    base = _safe_filename(str(row.get("feature_set_name") or f"feat_{feat_id}"))
+    ftype = _safe_filename(str(row.get("feature_type") or "feature"))
+    stem = f"{base}_{ftype}"
+
+    if fmt == "csv":
+        return {
+            "file_path": str(src),
+            "filename": f"{stem}.csv",
+            "media_type": "text/csv",
+        }, None
+
+    try:
+        df = pd.read_csv(src)
+    except Exception as exc:
+        return None, f"读取特征矩阵失败: {exc}"
+
+    out_json = feature_storage_path(user_id, f"{stem}_export.json")
+    Path(out_json).parent.mkdir(parents=True, exist_ok=True)
+    df.to_json(out_json, orient="records", force_ascii=False, indent=2)
+    return {
+        "file_path": out_json,
+        "filename": f"{stem}.json",
+        "media_type": "application/json",
+    }, None

@@ -25,6 +25,7 @@ from backend.api_models import (
     SaveSessionTitleRequest,
     CreateSessionRequest,
     CopyProjectRawRequest,
+    DeleteSessionFileRequest,
 )
 from backend.auth_service import (
     build_send_sms_code_response,
@@ -36,6 +37,7 @@ from backend.jwt_auth import CurrentUser, get_current_user
 from backend.route_services import (
     build_health_response,
     handle_session_upload_excel,
+    handle_session_delete_file,
     build_session_snapshot_response,
     build_run_analysis_response,
     build_reconnect_analysis_response,
@@ -132,6 +134,18 @@ async def session_upload_excel(
     return await handle_session_upload_excel(file, session_id, current_user.user_id)
 
 
+@app.delete("/session/workspace-file")
+async def session_delete_workspace_file(
+    body: DeleteSessionFileRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    return handle_session_delete_file(
+        body.session_id,
+        body.relative_path,
+        current_user.user_id,
+    )
+
+
 @app.get("/session/snapshot")
 async def session_snapshot(
     session_id: str,
@@ -191,9 +205,11 @@ async def update_username(
     return build_update_username_response(current_user.user_id, body.username.strip())
 
 
+from backend.access_log_filter import install_access_log_filters
 from backend.route_registry import register_modular_routes
 
 register_modular_routes(app)
+install_access_log_filters()
 
 # -------------------------- 启动服务器 --------------------------
 if __name__ == "__main__":

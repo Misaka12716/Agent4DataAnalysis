@@ -132,6 +132,29 @@ def test_has_analyzable_workspace_true_for_table():
     assert has_analyzable_workspace(_analyzable_workspace_context()) is True
 
 
+def test_has_analyzable_workspace_true_for_text_json():
+    ctx = {
+        "file_list": ["data.json"],
+        "workspace_digest": {
+            "files": {
+                "data.json": {
+                    "file_type": "text",
+                    "relative_path": "data.json",
+                }
+            }
+        },
+    }
+    assert has_analyzable_workspace(ctx) is True
+
+
+def test_has_analyzable_workspace_true_for_text_by_extension():
+    ctx = {
+        "file_list": ["notes.txt"],
+        "workspace_digest": {"files": {}},
+    }
+    assert has_analyzable_workspace(ctx) is True
+
+
 def test_clamp_route_no_data_forces_reporter_instead_of_coder():
     """规划已通过但工作区无数据时，禁止硬走 coder/worker。"""
     state = _base_state(

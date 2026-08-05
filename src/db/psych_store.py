@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from db.psych_schema import (
     TABLE_PSYCH_ANALYSIS_PARAMS,
     TABLE_PSYCH_CAPABILITIES,
-    TABLE_PSYCH_CAPABILITY_CHANGELOG,
     TABLE_PSYCH_DATA_RECORDS,
     TABLE_PSYCH_DATASETS,
     TABLE_PSYCH_EXPORTS,
@@ -694,27 +693,6 @@ def update_capability(capability_id: str, fields: Dict[str, Any]) -> Optional[st
         tuple(vals),
     )
     return uerr
-
-
-def insert_capability_changelog(data: Dict[str, Any]) -> Tuple[Optional[int], Optional[str]]:
-    return _insert(TABLE_PSYCH_CAPABILITY_CHANGELOG, data)
-
-
-def list_capability_changelog(capability_id: Optional[str] = None, limit: int = 50) -> Tuple[List[dict], Optional[str]]:
-    err = _ensure()
-    if err:
-        return [], err
-    sql = f"SELECT * FROM {TABLE_PSYCH_CAPABILITY_CHANGELOG}"
-    params: List[Any] = []
-    if capability_id:
-        sql += " WHERE capability_id = %s"
-        params.append(capability_id)
-    sql += " ORDER BY id DESC LIMIT %s"
-    params.append(int(limit))
-    rows, qerr = mysql_handler.query(sql, tuple(params))
-    if qerr:
-        return [], qerr
-    return [_parse_json_fields(r, ()) for r in (rows or [])], None
 
 
 def insert_pipeline(data: Dict[str, Any]) -> Tuple[Optional[int], Optional[str]]:

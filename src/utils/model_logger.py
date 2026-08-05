@@ -6,7 +6,8 @@ from typing import Any, Literal
 from configs.config import TEMP_FOLDER, ENABLE_MODEL_LOG
 
 
-LOG_FOLDER = os.path.join(TEMP_FOLDER, "logs")
+# 会话/编排调试日志与进程日志（backend.log）分开，避免混在同一目录
+LOG_FOLDER = os.path.join(TEMP_FOLDER, "logs", "sessions")
 
 EventKind = Literal["llm", "phase_start", "phase_end", "milestone"]
 

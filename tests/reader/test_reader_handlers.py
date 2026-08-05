@@ -3,22 +3,52 @@
 from __future__ import annotations
 
 import json
+import shutil
+import sys
 from pathlib import Path
+from unittest.mock import MagicMock
+
+# 避免 reader 链路拉取 langchain_openai（部分 CI/环境未安装）
+sys.modules.setdefault("langchain_openai", MagicMock())
+sys.modules.setdefault("reader.agent", MagicMock())
 
 import pandas as pd
 import pytest
 from PIL import Image
 
+from configs.config import READER_TABLE_SAMPLE_ROWS
 from reader.handlers.document_docx import digest_docx_file
 from reader.handlers.document_pdf import digest_pdf_file
 from reader.handlers.image import digest_image_file
+from reader.handlers.imaging_dicom import digest_dicom_file
 from reader.handlers.table import _read_raw_table, digest_table_file
 from reader.handlers.text import digest_text_file
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+TABLE_FIXTURES = FIXTURES / "table"
+IMAGING_FIXTURES = FIXTURES / "imaging"
+TEXT_FIXTURES = FIXTURES / "text"
+
+TEXT_PREVIEW_MARKERS = {
+    "txt": "AgentPlatform text fixture",
+    "md": "# Sample Notes",
+    "json": '"name": "sample"',
+    "yaml": "name: sample",
+    "xml": "<sample>",
+    "html": "Sample HTML",
+    "log": "INFO boot start",
+}
 
 
 def _assert_no_missing_lib_note(entry: dict) -> None:
     note = entry.get("note") or ""
     assert "未安装" not in note, f"unexpected missing-lib note: {note}"
+
+
+def _copy_fixture(src: Path, tmp_path: Path) -> str:
+    dest = tmp_path / src.name
+    shutil.copy2(src, dest)
+    return src.name
 
 
 def test_digest_csv_and_tsv(tmp_path: Path):
@@ -70,14 +100,14 @@ def test_read_raw_table_xlsx_uses_openpyxl(tmp_path: Path):
     reason="xlrd not installed",
 )
 def test_digest_xls_with_xlrd(tmp_path: Path):
-    fp = tmp_path / "legacy.xls"
-    try:
-        pd.DataFrame({"a": [1, 2]}).to_excel(fp, index=False, engine="xlwt")
-    except Exception:
-        pytest.skip("xlwt not available to create .xls fixture")
-    entry = digest_table_file(str(tmp_path), "legacy.xls")
+    src = TABLE_FIXTURES / "mixed-types.xls"
+    assert src.is_file()
+    name = _copy_fixture(src, tmp_path)
+    entry = digest_table_file(str(tmp_path), name)
     _assert_no_missing_lib_note(entry)
     assert entry.get("error") is None
+    assert entry.get("shape", [0])[0] >= 490
+    assert entry.get("columns")
 
 
 def test_digest_docx_paragraphs_and_tables(tmp_path: Path):
@@ -158,6 +188,26 @@ def test_digest_text_and_json(tmp_path: Path):
     assert "foo" in (json_entry.get("json_keys") or [])
 
 
+@pytest.mark.parametrize("ext", list(TEXT_PREVIEW_MARKERS))
+def test_digest_text_fixture(tmp_path: Path, ext: str):
+    src = TEXT_FIXTURES / f"sample.{ext}"
+    assert src.is_file(), f"missing fixture: {src}"
+    name = _copy_fixture(src, tmp_path)
+    entry = digest_text_file(str(tmp_path), name)
+    assert entry.get("error") is None
+    assert entry.get("file_type") == "text"
+    assert entry.get("format") == ext
+    assert "utf" in (entry.get("encoding") or "").lower()
+    preview = entry.get("preview") or ""
+    assert preview
+    assert TEXT_PREVIEW_MARKERS[ext] in preview
+    if ext == "json":
+        assert entry.get("json_type") == "dict"
+        keys = entry.get("json_keys") or []
+        assert "name" in keys
+        assert "version" in keys
+
+
 def test_digest_png(tmp_path: Path):
     fp = tmp_path / "img.png"
     Image.new("RGB", (16, 8), color=(255, 0, 0)).save(fp)
@@ -175,3 +225,46 @@ def test_check_reader_parse_deps_runs():
     assert isinstance(status, dict)
     assert "python-docx" in status
     assert "Pillow" in status
+
+
+@pytest.mark.parametrize("ext", [".csv", ".tsv", ".xlsx", ".xls"])
+def test_digest_mixed_types_fixture(tmp_path: Path, ext: str):
+    if ext == ".xls" and __import__("importlib").util.find_spec("xlrd") is None:
+        pytest.skip("xlrd not installed")
+    src = TABLE_FIXTURES / f"mixed-types{ext}"
+    assert src.is_file(), f"missing fixture: {src}"
+    name = _copy_fixture(src, tmp_path)
+    entry = digest_table_file(str(tmp_path), name)
+    assert entry.get("error") is None
+    # 首行为 Sample-Files 注释；header=None 后第 0 行作表头 → 约 501 行数据
+    assert entry.get("shape", [0])[0] >= 490
+    assert entry.get("columns")
+    assert entry.get("sample_rows")
+
+
+def test_digest_large_dataset_fixture(tmp_path: Path):
+    src = TABLE_FIXTURES / "large-dataset.csv"
+    assert src.is_file()
+    name = _copy_fixture(src, tmp_path)
+    entry = digest_table_file(str(tmp_path), name)
+    assert entry.get("error") is None
+    assert entry.get("shape", [0])[0] >= 100000
+    sample = entry.get("sample_rows") or []
+    assert 0 < len(sample) <= READER_TABLE_SAMPLE_ROWS
+
+
+def test_digest_dicom_patient_ct_fixture(tmp_path: Path):
+    src = IMAGING_FIXTURES / "患者CT.dcm"
+    assert src.is_file()
+    name = _copy_fixture(src, tmp_path)
+    entry = digest_dicom_file(str(tmp_path), name)
+    assert entry.get("file_type") == "imaging"
+    assert entry.get("format") == "dicom"
+    assert entry.get("file_size_bytes", 0) > 1_000_000
+    if entry.get("note") and "未安装 pydicom" in entry["note"]:
+        assert entry.get("error") is None
+        return
+    assert entry.get("error") is None
+    assert entry.get("modality") is not None
+    assert entry.get("rows") is not None
+    assert entry.get("columns") is not None

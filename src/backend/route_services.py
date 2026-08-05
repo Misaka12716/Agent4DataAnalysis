@@ -22,7 +22,8 @@ from backend.project_auth import (
     assert_session_access,
     assert_session_project_not_archived,
 )
-from db.rbac_schema import PERM_ANALYSIS_CREATE, PERM_DATA_UPLOAD
+from db.rbac_schema import PERM_ANALYSIS_CREATE, PERM_DATA_DELETE, PERM_DATA_UPLOAD
+from db.rbac_store import RbacStore
 from backend.project_asset_registry import register_upload, relative_path_for_project_asset
 from db.session_store import SessionStore
 from utils.upload_naming import allocate_unique_name_in_dir, original_basename
@@ -30,10 +31,12 @@ from utils.workspace_manager import (
     init_workspace,
     build_workspace_tree,
     build_workspace_files_payload,
+    is_safe_relative_path,
     resolve_project_root,
+    resolve_workspace_root,
 )
-from utils.workspace_file_ops import write_bytes_file
-from utils.session_memory import persist_workspace_snapshot
+from utils.workspace_file_ops import delete_file, write_bytes_file
+from utils.session_memory import SESSION_MEMORY_FILENAME, persist_workspace_snapshot
 from runtime.factory import ensure_runtime
 from configs.config import LANGUAGE
 
@@ -166,16 +169,94 @@ async def handle_session_upload_excel(
         except Exception:
             pass
 
+    from backend.chunked_upload_finalize import attach_deprecated_fields
+
+    return JSONResponse(
+        content=attach_deprecated_fields(
+            {
+                "status": "success",
+                "message": "文件已写入会话工作区根目录",
+                "session_id": session_id,
+                "relative_path": safe_name,
+                "original_filename": client_original,
+                "renamed": allocated.renamed,
+                "file_category": classify_file(safe_name),
+                "workspace_abs_path": workspace_abs,
+            }
+        ),
+        status_code=200,
+    )
+
+
+def handle_session_delete_file(
+    session_id: str,
+    relative_path: str,
+    current_user_id: int,
+) -> JSONResponse:
+    """删除会话工作区内的单个文件，并清理对应 project_assets 登记。"""
+    if not session_id.strip():
+        raise HTTPException(status_code=400, detail="session_id 不能为空")
+    session_user = assert_session_access(session_id, current_user_id, PERM_DATA_DELETE)
+    assert_session_project_not_archived(session_user)
+
+    rel = (relative_path or "").strip().replace("\\", "/").lstrip("/")
+    if not rel or not is_safe_relative_path(rel) or ".." in rel.split("/"):
+        raise HTTPException(status_code=400, detail="relative_path 无效")
+    if os.path.basename(rel) == SESSION_MEMORY_FILENAME or rel == SESSION_MEMORY_FILENAME:
+        raise HTTPException(status_code=400, detail="禁止删除系统文件 SESSION_MEMORY.md")
+
+    workspace_abs = str(session_user.get("workspace_abs_path") or "").strip()
+    if not workspace_abs:
+        workspace_abs = resolve_workspace_root(session_id) or ""
+    if not workspace_abs:
+        raise HTTPException(status_code=404, detail="会话工作区不存在")
+
+    abs_path = os.path.normpath(os.path.join(workspace_abs, rel.replace("/", os.sep)))
+    workspace_norm = os.path.normpath(workspace_abs)
+    if not abs_path.startswith(workspace_norm + os.sep) and abs_path != workspace_norm:
+        raise HTTPException(status_code=400, detail="路径越界")
+    if os.path.isdir(abs_path):
+        raise HTTPException(status_code=400, detail="仅支持删除文件，不支持删除目录")
+    if not os.path.isfile(abs_path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    ensure_runtime(session_id)
+    if not delete_file(session_id, rel):
+        raise HTTPException(status_code=500, detail="删除文件失败")
+
+    project_id = session_user.get("project_id")
+    if project_id:
+        try:
+            proj_root = resolve_project_root(int(project_id))
+            if proj_root:
+                asset_rel = relative_path_for_project_asset(
+                    proj_root,
+                    workspace_abs,
+                    session_id,
+                    abs_path,
+                )
+                RbacStore.delete_asset(int(project_id), asset_rel)
+        except Exception:
+            logger.debug(
+                "cleanup project_assets failed: session=%s path=%s",
+                session_id,
+                rel,
+                exc_info=True,
+            )
+
+    _schedule_workspace_snapshot(
+        session_id,
+        lang=LANGUAGE,
+        note=f"已从工作区删除文件：`{rel}`。",
+        input_hint="（删除后尚未发起新一轮分析时可参考下列文件列表）",
+    )
+
     return JSONResponse(
         content={
             "status": "success",
-            "message": "文件已写入会话工作区根目录",
+            "msg": "file deleted",
             "session_id": session_id,
-            "relative_path": safe_name,
-            "original_filename": client_original,
-            "renamed": allocated.renamed,
-            "file_category": classify_file(safe_name),
-            "workspace_abs_path": workspace_abs,
+            "relative_path": rel,
         },
         status_code=200,
     )

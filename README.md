@@ -17,7 +17,7 @@
 - 会话级工作区：每个用户在 `TEMP_FOLDER/workspaces/<user_id>/<project_id>/sessions/<session_id>/` 拥有独立目录（历史数据可能仍在 `.../<user_id>/<session_id>/`，只读兼容）；默认经 **本地 Runtime**（[`src/runtime/`](src/runtime/)）读写与执行 Python。
 - **项目模型**：Project 是 RBAC 与资产容器；Session 是一次分析/对话的执行单元。分析前须创建会话并将数据上传到会话工作区（或从项目 `raw/` 复制，见 `POST /session/copy-from-project-raw`）。
 - 代码执行：Worker 通过 **`RUNNER_PYTHON`** 使用专用 conda 环境 `agentPlatform-runner`（依赖见 [`requirements-runner.txt`](requirements-runner.txt)），与 FastAPI 主环境隔离。conda `base` 为根环境不可改名，勿当作 Runner。
-- 文件上传：支持将 `xlsx/xls/csv` 等写入工作区根目录；无同名冲突时保留用户原名，冲突时自动改为 `原名 (1).ext`。
+- 文件上传：支持将表格 / 文本 / 文档 / 图片 / 医学影像（xlsx/xls/csv/tsv、txt/md/json/yaml/xml/html/log、pdf/docx、png/jpg 等、dcm/dicom）写入工作区根目录；无同名冲突时保留用户原名，冲突时自动改为 `原名 (1).ext`。
 - 任务流式分析：后端通过 SSE 持续推送编排决策、各阶段事件与报告片段；每条有效负载会先写入 MySQL 会话内容（累计全文 + 版本号），再推送给客户端。
 - 断线重连：可通过快照接口拉取当前累计内容与版本号。
 - 最简测试前端：内置 Streamlit 页面用于联调上传/快照/流式分析接口。
@@ -189,7 +189,8 @@ bash scripts/stop.sh --all                # 停止全部
 - **后端**：`http://<主机>:52716`
 - **联调前端**：`http://<主机>:8501`（`frontend.py` 多页：流式分析 / 模板分析 / 项目成员；**仅调试用**，正式前端按 [`docs/TemplateAPI.md`](docs/TemplateAPI.md) 对接 HTTP）
 - **验收登录**（可选）：`ACCEPTANCE_MODE=1 bash scripts/init-platform.sh --acceptance` 后，侧栏 `13800000000` / `888888`
-- **演示数据**：运行 `init-platform.sh` 后位于 `tests/fixtures/`（横截面 + 纵向样本）
+- **演示数据**：运行 `init-platform.sh` 后位于 `tests/fixtures/`（横截面 + 纵向样本）；另有 `table/`（混合类型 / 大 CSV）、`imaging/患者CT.dcm` 供上传与 Reader 验收
+- **测试**：按业务分子目录，说明见 [`docs/Tests.md`](docs/Tests.md)；对话分析单/多文件对比实验：`python scripts/run_conversation_analysis_experiment.py`（素材目录 `tests/fixtures/conversation_analysis/`）
 
 健康检查：
 
@@ -213,14 +214,25 @@ curl http://localhost:52716/health
 
 ### `POST /session/upload-excel`
 
-上传表格 / 图片 / 文本到会话工作区根目录（扩展名白名单与 Reader 一致；路径名保留历史兼容）。
+上传表格 / 图片 / 文本 / 文档 / 医学影像到会话工作区根目录（扩展名白名单与 Reader 一致；路径名保留历史兼容）。
 
 - form-data:
-  - `file`: 文件（table: xlsx/xls/csv/tsv；image: png/jpg/jpeg/gif/webp/bmp；text: txt/md/json/yaml/yml/log/xml/html/htm）
+  - `file`: 文件（table: xlsx/xls/csv/tsv；image: png/jpg/jpeg/gif/webp/bmp；text: txt/md/json/yaml/yml/log/xml/html/htm；document: pdf/docx；imaging: dcm/dicom）
   - `session_id`: 会话 ID（必填）
 
-- 成功响应额外字段：`original_filename`、`file_category`（`table` / `image` / `text`）
+- 成功响应额外字段：`original_filename`、`file_category`（`table` / `image` / `text` / `document` / `imaging`）
 - 不支持类型返回 `415`
+
+### `DELETE /session/workspace-file`
+
+删除会话工作区中的单个文件（需 `data_delete`）。
+
+- json:
+  - `session_id`: 会话 ID（必填）
+  - `relative_path`: 相对工作区根的文件路径（必填，与上传响应一致）
+
+- 禁止删除 `SESSION_MEMORY.md`；不支持删目录
+- 若会话关联项目，同步清理 `project_assets` 登记
 
 ### `GET /session/snapshot`
 

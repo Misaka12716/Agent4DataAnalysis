@@ -19,7 +19,13 @@ from configs.config import (
 )
 from db.session_store import SessionStore
 from reader.agent import run_workspace_reader_with_markdown_sync
-from reader.file_types import IMAGE_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS
+from reader.file_types import (
+    DOCUMENT_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    IMAGING_EXTENSIONS,
+    TABLE_EXTENSIONS,
+    TEXT_EXTENSIONS,
+)
 from reader.formatters import workspace_digest_to_markdown
 from utils.workspace_manager import list_workspace_files, resolve_workspace_root
 
@@ -109,8 +115,8 @@ def format_memory_for_prompt(excerpt: str, lang: str) -> str:
 
 def _classify_files(
     names: List[str],
-) -> tuple[List[str], List[str], List[str], List[str], List[str]]:
-    data, images, text_files, code, other = [], [], [], [], []
+) -> tuple[List[str], List[str], List[str], List[str], List[str], List[str], List[str]]:
+    data, images, text_files, documents, imaging, code, other = [], [], [], [], [], [], []
     for n in names:
         low = n.lower()
         _, ext = os.path.splitext(low)
@@ -120,13 +126,17 @@ def _classify_files(
             images.append(n)
         elif ext in TEXT_EXTENSIONS:
             text_files.append(n)
+        elif ext in DOCUMENT_EXTENSIONS:
+            documents.append(n)
+        elif ext in IMAGING_EXTENSIONS:
+            imaging.append(n)
         elif ext == ".py":
             code.append(n)
         elif low.startswith("data"):
             data.append(n)
         else:
             other.append(n)
-    return data, images, text_files, code, other
+    return data, images, text_files, documents, imaging, code, other
 
 
 def _workspace_digest(workspace_abs: str, session_id: str = "") -> str:
@@ -214,7 +224,7 @@ def build_session_memory_markdown(
     files = list((workspace_context or {}).get("file_list") or [])
     if not files and session_id:
         files = list_workspace_files(session_id)
-    data_f, images_f, text_f, code_f, other_f = _classify_files(files)
+    data_f, images_f, text_f, docs_f, imaging_f, code_f, other_f = _classify_files(files)
 
     pd = plan_data if isinstance(plan_data, dict) else None
     ra = (pd.get("需求解析") if pd else "") or requirement_analysis
@@ -295,6 +305,8 @@ def build_session_memory_markdown(
 - **数据文件:** {", ".join(data_f) if data_f else "—"}
 - **图片:** {", ".join(images_f) if images_f else "—"}
 - **文本:** {", ".join(text_f) if text_f else "—"}
+- **文档:** {", ".join(docs_f) if docs_f else "—"}
+- **医学影像:** {", ".join(imaging_f) if imaging_f else "—"}
 - **代码文件:** {", ".join(code_f) if code_f else "—"}
 - **其他:** {", ".join(other_f) if other_f else "—"}
 

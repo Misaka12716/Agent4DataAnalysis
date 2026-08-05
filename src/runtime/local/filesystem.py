@@ -58,6 +58,19 @@ class LocalFilesystem:
         abs_path = self._abs_path(rel)
         return bool(abs_path and os.path.exists(abs_path))
 
+    def delete(self, path: str) -> bool:
+        rel = (path or "").replace("\\", "/").lstrip("/")
+        if not is_safe_relative_path(rel):
+            return False
+        abs_path = self._abs_path(rel)
+        if not abs_path or not os.path.isfile(abs_path):
+            return False
+        try:
+            os.remove(abs_path)
+            return True
+        except OSError:
+            return False
+
     def list(self, dir_path: str = ".", depth: int = 1) -> List[str]:
         rel_dir = "" if dir_path in (".", "./", "") else dir_path.strip("/")
         base = self._abs_path(rel_dir or ".")

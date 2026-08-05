@@ -1,0 +1,3 @@
+AgentPlatform text fixture
+Line two: plain UTF-8 notes.
+Line three: upload allowlist check.

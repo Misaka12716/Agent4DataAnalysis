@@ -1,0 +1,5 @@
+{
+  "name": "单文件示例（请改名为 meta.json 并放入真实数据）",
+  "files": ["sample.csv"],
+  "prompt": null
+}

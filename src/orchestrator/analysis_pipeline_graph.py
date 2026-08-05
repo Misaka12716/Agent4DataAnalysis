@@ -86,8 +86,10 @@ async def _persist_state_async(state: Dict[str, Any], **kwargs: Any) -> None:
 
 def _should_try_json_schema_method(llm: ChatOpenAI) -> bool:
     """
-    部分 OpenAI 兼容网关/本地模型不支持 response_format=json_schema，
-    会返回 500（例如 vocabulary/format 相关报错）。对这些模型直接跳过 json_schema。
+    仅对已知支持 response_format=json_schema 的 OpenAI 系模型尝试该方法。
+
+    本地/兼容网关（glm、qwen、ollama 等）常因 vocabulary/format 返回 500；
+    未知或空模型名默认跳过，优先 function_calling + raw JSON 回退。
     """
     model_name = (
         str(getattr(llm, "model_name", "") or getattr(llm, "model", "") or "")
@@ -95,18 +97,10 @@ def _should_try_json_schema_method(llm: ChatOpenAI) -> bool:
         .lower()
     )
     if not model_name:
-        return True
+        return False
 
-    # 常见本地/兼容模型：优先 function_calling + raw fallback，避免 json_schema 触发网关 500。
-    unsupported_keywords = (
-        "qwen",
-        "llama",
-        "mistral",
-        "deepseek",
-        "gemma",
-        "yi",
-    )
-    return not any(k in model_name for k in unsupported_keywords)
+    supported_prefixes = ("gpt-", "o1-", "o3-", "o4-", "chatgpt-")
+    return model_name.startswith(supported_prefixes)
 
 # LangGraph 在传递/合并 dict 状态时可能丢弃不可 JSON 序列化的值（如 asyncio.Queue），
 # 因此事件队列不放入 state，而用 ContextVar 在同一次 ainvoke 调用链上传递。

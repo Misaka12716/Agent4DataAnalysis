@@ -11,8 +11,37 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 # 避免 import db/session_store 时连接真实 MySQL
+# 必须先保存真实 connect，再 patch（供 tests/analysis/functional 恢复）
+from _pymysql_sentinel import REAL_PYMYSQL_CONNECT  # noqa: E402
+import pymysql as _pymysql_mod
+
 _pymysql_patch = patch("pymysql.connect", return_value=MagicMock())
 _pymysql_patch.start()
+
+
+def enable_real_pymysql() -> None:
+    """功能集成测：停掉 mock，恢复真实 pymysql.connect。"""
+    from unittest import mock as _mock
+
+    try:
+        _pymysql_patch.stop()
+    except RuntimeError:
+        pass
+    for patcher in list(getattr(_mock.patch, "_active_patches", []) or []):
+        if getattr(patcher, "attribute", None) == "connect":
+            try:
+                patcher.stop()
+            except RuntimeError:
+                pass
+    _pymysql_mod.connect = REAL_PYMYSQL_CONNECT
+
+
+def restore_mock_pymysql() -> None:
+    """功能集成测结束后恢复 mock，避免污染其它用例。"""
+    try:
+        _pymysql_patch.start()
+    except RuntimeError:
+        pass
 
 
 @pytest.fixture(autouse=True)

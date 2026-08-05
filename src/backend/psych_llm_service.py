@@ -24,9 +24,9 @@ def _chat(prompt: str, system: str = "你是精神专科临床数据分析助手
         logger.warning("llm_client.chat_json failed: %s", exc)
 
     try:
-        from planner.planner_utils import get_chat_model
+        from planner.planner_utils import create_llm
 
-        llm = get_chat_model()
+        llm = create_llm(streaming=False)
         resp = llm.invoke(
             [
                 {"role": "system", "content": system},

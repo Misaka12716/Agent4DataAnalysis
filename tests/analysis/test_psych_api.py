@@ -96,13 +96,20 @@ def test_capability_bootstrap_list():
 
 
 def test_psych_routes_register():
-    from fastapi import FastAPI
+    """全量路径注册断言：与 PsychAPI.md / psych_routes 清单对齐。"""
+    from pathlib import Path
+    import sys
 
-    from backend.psych_routes import register_psych_routes
+    _dir = Path(__file__).resolve().parent
+    if str(_dir) not in sys.path:
+        sys.path.insert(0, str(_dir))
 
-    app = FastAPI()
-    register_psych_routes(app)
-    paths = {getattr(r, "path", None) for r in app.routes}
+    from psych_test_helpers import EXPECTED_PSYCH_PATHS, make_psych_app, registered_paths
+
+    app = make_psych_app()
+    paths = registered_paths(app)
+    missing = EXPECTED_PSYCH_PATHS - paths
+    assert not missing, f"未注册的 psych 路径: {sorted(missing)}"
     assert "/psych/health" in paths
     assert "/psych/stats/run" in paths
     assert "/psych/ml/train" in paths
@@ -110,3 +117,4 @@ def test_psych_routes_register():
     assert "/psych/dl/train" in paths
     assert "/psych/capabilities" in paths
     assert "/psych/scales/score" in paths
+    assert "/psych-app" in paths

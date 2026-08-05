@@ -60,12 +60,30 @@
 | `/session/list` | `GET` | 查询可访问会话列表；可选 `?project_id=` 过滤（需 Bearer Token） |
 | `/session/meta` | `GET` | 查询会话元数据（project_id、工作区路径等） |
 | `/session/copy-from-project-raw` | `POST` | 将项目 raw/ 文件复制到会话工作区（分析入口） |
-| `/session/upload-excel` | `POST` | 上传文件到会话工作区（需 Bearer Token + 会话归属） |
+| `/upload/chunked/init` | `POST` | 分片上传：创建会话（推荐；见 [ChunkedUploadFrontend.md](ChunkedUploadFrontend.md)） |
+| `/upload/chunked/{upload_id}/parts/{index}` | `PUT` | 分片上传：写入单个分片 |
+| `/upload/chunked/{upload_id}` | `GET` | 分片上传：状态 / 断点续传 |
+| `/upload/chunked/{upload_id}/complete` | `POST` | 分片上传：合并并落盘 |
+| `/upload/chunked/{upload_id}` | `DELETE` | 分片上传：中止清理 |
+| `/session/upload-excel` | `POST` | 上传文件到会话工作区（**deprecated**，请改用分片协议） |
+| `/session/workspace-file` | `DELETE` | 删除会话工作区单个文件（需 Bearer Token + `data_delete`） |
 | `/session/workspace-tree` | `GET` | 查询会话工作区目录树（需 Bearer Token + 会话归属） |
 | `/session/snapshot` | `GET` | 获取会话内容快照（需 Bearer Token + 会话归属） |
 | `/run-analysis` | `POST` | 发起流式分析任务（需 Bearer Token + 会话归属） |
 | `/run-analysis/reconnect` | `POST` | 断线恢复流（需 Bearer Token + 会话归属） |
 | `/health` | `GET` | 健康检查（公开） |
+
+---
+
+## 2.1 分片上传（推荐）
+
+大文件请使用统一协议 `/upload/chunked/*`（`target`：`session` / `project_raw` / `resources_*` / `psych_ingest`）。**不含** workbench。
+
+完整契约、前端伪代码、断点续传与迁移清单见 **[ChunkedUploadFrontend.md](ChunkedUploadFrontend.md)**。
+
+联调可用仓库样例：`tests/fixtures/table/large-dataset.csv`（~10MB）、`tests/fixtures/imaging/患者CT.dcm`（~12MB DICOM）。
+
+对应旧整文件 multipart 接口均已标记 `deprecated: true`，过渡期仍可用。
 
 ---
 
@@ -402,6 +420,7 @@
 ### 3.8 上传会话文件（多模态）
 
 - 路径：`POST /session/upload-excel`（历史路径名保留；实际支持表格 / 图片 / 文本 / 文档 / 医学影像，与 FormatRegistry + Reader 分类一致）
+- **Deprecated**：响应含 `deprecated: true`；新产品前端请改用统一分片协议，见 [ChunkedUploadFrontend.md](ChunkedUploadFrontend.md)（`target=session`）。
 - 处理函数：`handle_session_upload_excel(...)`
 - 鉴权：`Authorization: Bearer <access_token>`（必填）；且 session 须属于当前用户
 - Content-Type：`multipart/form-data`
@@ -414,8 +433,9 @@
   - **image**：`.png`、`.jpg`、`.jpeg`、`.gif`、`.webp`、`.bmp`（Reader 经 `DEFAULT_VISION_MODEL`/deepseek-ocr:latest 识别文字后写入 digest）
   - **text**：`.txt`、`.md`、`.json`、`.yaml`、`.yml`、`.log`、`.xml`、`.html`、`.htm`
   - **document**：`.pdf`、`.docx`
-  - **imaging**：`.dcm`、`.dicom`
+  - **imaging**：`.dcm`、`.dicom`（样例：`tests/fixtures/imaging/患者CT.dcm`）
   - 未注册类型返回 `415`；自定义扩展可通过 `knowledge/format_rules.json` 或内置规则配置
+  - 表格大文件样例：`tests/fixtures/table/large-dataset.csv`、`mixed-types.csv`（见 [ChunkedUploadFrontend.md](ChunkedUploadFrontend.md) §10）
 - 请求体示例（curl）：
 ```bash
 curl -X POST "http://localhost:52716/session/upload-excel" \
@@ -459,6 +479,46 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
   4. 无同名冲突时保留清洗后的用户原名；冲突时自动分配 `原名 (1).ext` / `原名 (2).ext` …
   5. 经 `ensure_runtime(session_id).files.write` 写入工作区，并刷新 `SESSION_MEMORY.md` 快照。
   6. 响应中的 `workspace_abs_path` 为 DB 中记录的工作区路径；`original_filename` 为客户端原名，`relative_path` 为实际存盘名。
+
+---
+
+### 3.8.1 删除会话工作区文件
+
+- 路径：`DELETE /session/workspace-file`
+- 处理函数：`handle_session_delete_file(...)`
+- 鉴权：`Authorization: Bearer <access_token>`（必填）；需会话访问权限，且对关联项目具备 `data_delete`
+- Content-Type：`application/json`
+- 请求体参数（JSON）：
+  - `session_id: str`（必填）
+  - `relative_path: str`（必填，相对会话工作区根的文件路径，与上传响应 / workspace-tree 一致）
+- 请求体示例（curl）：
+```bash
+curl -X DELETE "http://localhost:52716/session/workspace-file" \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"9e9f3f2f-5978-4b31-a57f-95b0e6478b73","relative_path":"demo.xlsx"}'
+```
+- 成功返回示例（`200`）：
+```json
+{
+  "status": "success",
+  "msg": "file deleted",
+  "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
+  "relative_path": "demo.xlsx"
+}
+```
+- 行为说明：
+  - 仅删除普通文件；不支持目录 / 批量删除
+  - 禁止删除系统文件 `SESSION_MEMORY.md`
+  - 经 `runtime.files.delete` 删除（本地 Runtime 或 Cube 沙箱+本地镜像）
+  - 若会话关联项目，同步清理 `project_assets` 中对应登记
+  - 删除成功后刷新 `SESSION_MEMORY.md` 快照
+- 常见错误：
+  - `401`：未登录或 token 无效/过期
+  - `403`：无会话访问权限或缺少 `data_delete`
+  - `400`：`relative_path` 无效、路径为目录、或试图删除系统文件
+  - `404`：`session_id` 不存在或文件不存在
+  - `500`：删除失败
 
 ---
 
