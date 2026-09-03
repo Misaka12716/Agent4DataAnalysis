@@ -90,37 +90,3 @@ def register_analysis_outputs(session_id: str) -> None:
         promote_session_outputs(session_id)
     except Exception:
         pass
-
-
-def register_template_run_outputs(session_id: str, workspace_root: str) -> None:
-    """登记 template_runs 目录下的产出。"""
-    try:
-        row, err = SessionStore.get_session_user(session_id)
-        if err or not row or not row.get("project_id"):
-            return
-        project_id = int(row["project_id"])
-        project_root = resolve_project_root(project_id)
-        if not project_root:
-            return
-        runs_dir = os.path.join(workspace_root, "template_runs")
-        if not os.path.isdir(runs_dir):
-            return
-        for current_root, _dir_names, file_names in os.walk(runs_dir):
-            for file_name in file_names:
-                abs_path = os.path.join(current_root, file_name)
-                rel_path = relative_path_for_project_asset(
-                    project_root, workspace_root, session_id, abs_path
-                )
-                ProjectStore.create_asset(
-                    project_id=project_id,
-                    asset_type=ASSET_TYPE_ANALYSIS_OUTPUT,
-                    relative_path=rel_path,
-                    session_id=session_id,
-                    original_filename=file_name,
-                    file_category=classify_file(file_name),
-                )
-        from backend.project_lifecycle import promote_session_outputs
-
-        promote_session_outputs(session_id)
-    except Exception:
-        pass

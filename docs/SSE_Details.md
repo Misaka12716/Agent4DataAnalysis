@@ -215,16 +215,14 @@ data: <json-string>
 
 ## 7. 前端消费方式（当前实现）
 
-`src/frontend/frontend.py` 的流式读取方式：
+[`web/src/api/analysis.ts`](../web/src/api/analysis.ts) 的流式读取方式：
 
-- 使用 `httpx.stream("POST", "/run-analysis", json=...)`
-- 循环 `resp.iter_lines()`
-- 仅处理以 `data:` 开头的行
-- 对 `line[5:]` 做 JSON 解析
-- 遇到 `type=report_chunk` 时追加到 `report_parts`
-- 结束后可展开查看全部 SSE 事件
+- 使用 `fetch("POST", "/run-analysis", { body: JSON })` 获取 `ReadableStream`
+- 循环读取并按行解析 SSE `data: {...}` JSON
+- 遇到 `type=report_chunk` 时追加 `content` 到报告正文
+- 其他 `type` 写入编排时间线供调试展示
 
-这是一种“按行解析 SSE data 字段”的轻量实现，足够用于当前单事件通道。
+详见 [`Frontend.md`](Frontend.md)。
 
 ## 8. 联调建议与注意事项
 
@@ -233,7 +231,7 @@ data: <json-string>
 - 建议保留原始事件列表，便于排查 Supervisor 路由和失败回溯
 - 若部署在反向代理后，确保禁用响应缓冲（当前已设置 `X-Accel-Buffering: no`，代理侧也需对应配置）
 - 长链接场景下可配合 `/session/snapshot` 做断线重连恢复
-- 执行 Runtime 与可选 Cube Sandbox 见 [Cubesandbox-agent-integration.md](./Cubesandbox-agent-integration.md)
+- 执行 Runtime 与可选 Cube Sandbox 见项目 README 与 `src/runtime/` 文档
 
 ## 9. 一次完整流的典型事件顺序（示例）
 

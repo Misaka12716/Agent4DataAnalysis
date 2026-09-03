@@ -21,7 +21,7 @@ from backend.chunked_upload_service import (
     merge_parts,
     put_part,
 )
-from backend.jwt_auth import CurrentUser, get_current_user
+from backend.current_user import CurrentUser, get_default_user
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def register_chunked_upload_routes(app) -> None:
     @app.post("/upload/chunked/init")
     async def chunked_init(
         body: ChunkedInitRequest,
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         cleanup_expired()
         validate_init_target(
@@ -76,7 +76,7 @@ def register_chunked_upload_routes(app) -> None:
         index: int,
         chunk: UploadFile = File(...),
         part_sha256: Optional[str] = Form(None),
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         data = await chunk.read()
         payload, err, code = put_part(
@@ -93,7 +93,7 @@ def register_chunked_upload_routes(app) -> None:
     @app.get("/upload/chunked/{upload_id}")
     async def chunked_status(
         upload_id: str,
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         payload, err, code = get_upload_status(current_user.user_id, upload_id)
         if err:
@@ -103,7 +103,7 @@ def register_chunked_upload_routes(app) -> None:
     @app.post("/upload/chunked/{upload_id}/complete")
     async def chunked_complete(
         upload_id: str,
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         merged_path, meta, err, code = merge_parts(current_user.user_id, upload_id)
         if err:
@@ -131,7 +131,7 @@ def register_chunked_upload_routes(app) -> None:
     @app.delete("/upload/chunked/{upload_id}")
     async def chunked_abort(
         upload_id: str,
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         payload, err, code = abort_upload(current_user.user_id, upload_id)
         if err:

@@ -25,11 +25,6 @@ VALID_TARGETS = frozenset(
     {
         "session",
         "project_raw",
-        "resources_file",
-        "resources_dataset",
-        "resources_dataset_version",
-        "resources_model",
-        "psych_ingest",
     }
 )
 

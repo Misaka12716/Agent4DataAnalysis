@@ -1,4 +1,0 @@
-patient_id,visit_date,visit_type,HAMD_total,HAMA_total,PHQ9_total,medication,notes
-P001,2024-01-15,baseline,26,22,18,fluoxetine 20mg,baseline
-P001,2024-02-12,week4,20,18,14,fluoxetine 20mg,week4
-P001,2024-03-11,week8,16,14,10,fluoxetine 20mg,week8

@@ -7,7 +7,7 @@ import os
 from fastapi import Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-from backend.jwt_auth import CurrentUser, get_current_user
+from backend.current_user import CurrentUser, get_default_user
 from backend.project_auth import (
     assert_project_access,
     assert_project_manage_access,
@@ -28,7 +28,7 @@ def register_project_routes(app) -> None:
     @app.post("/project/create")
     async def project_create(
         body: ProjectCreateRequest,
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         from backend.project_service import ProjectService
 
@@ -41,7 +41,7 @@ def register_project_routes(app) -> None:
         )
 
     @app.get("/project/list")
-    async def project_list(current_user: CurrentUser = Depends(get_current_user)):
+    async def project_list(current_user: CurrentUser = Depends(get_default_user)):
         from backend.project_service import ProjectService
 
         rows, err = ProjectService.list_projects(current_user.user_id)
@@ -55,7 +55,7 @@ def register_project_routes(app) -> None:
     @app.get("/project/{project_id}")
     async def project_get(
         project_id: int,
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         from backend.project_service import ProjectService
 
@@ -70,7 +70,7 @@ def register_project_routes(app) -> None:
     async def project_update(
         project_id: int,
         body: ProjectUpdateRequest,
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         from backend.project_service import ProjectService
 
@@ -87,7 +87,7 @@ def register_project_routes(app) -> None:
     @app.get("/project/{project_id}/tree")
     async def project_tree(
         project_id: int,
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         from backend.project_service import ProjectService
 
@@ -101,7 +101,7 @@ def register_project_routes(app) -> None:
     @app.post("/project/{project_id}/archive")
     async def project_archive(
         project_id: int,
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         from backend.project_service import ProjectService
 
@@ -117,7 +117,7 @@ def register_project_routes(app) -> None:
     @app.post("/project/{project_id}/restore")
     async def project_restore(
         project_id: int,
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         from backend.project_service import ProjectService
 
@@ -134,7 +134,7 @@ def register_project_routes(app) -> None:
     async def project_upload(
         project_id: int,
         file: UploadFile = File(...),
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         from backend.project_asset_registry import register_upload
 
@@ -211,7 +211,7 @@ def register_project_routes(app) -> None:
     @app.get("/project/{project_id}/assets")
     async def project_assets(
         project_id: int,
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         from backend.project_service import ProjectService
 
@@ -227,7 +227,7 @@ def register_project_routes(app) -> None:
     @app.get("/project/{project_id}/sessions")
     async def project_sessions(
         project_id: int,
-        current_user: CurrentUser = Depends(get_current_user),
+        current_user: CurrentUser = Depends(get_default_user),
     ):
         from backend.project_service import ProjectService
 

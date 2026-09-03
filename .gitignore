@@ -66,6 +66,10 @@ tests/fixtures/conversation_analysis/results/**
 # Jupyter
 .ipynb_checkpoints/
 
+# Frontend (Vue)
+web/node_modules/
+web/dist/
+
 # Legacy / one-off trees
 input/
 temp_load/

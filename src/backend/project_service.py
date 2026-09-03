@@ -31,28 +31,10 @@ def _row_to_response(row: Dict[str, Any]) -> dict:
 
 
 def _enrich_project_access(item: dict, user_id: int, project_row: Dict[str, Any]) -> dict:
-    from backend.permission_service import get_effective_project_permissions
-    from db.rbac_schema import PROJECT_ROLE_MANAGER
-    from db.rbac_store import RbacStore
-
-    perms, access_type, err = get_effective_project_permissions(
-        int(item.get("id") or 0),
-        user_id,
-        project_row,
-    )
-    if err:
-        return item
-    access = access_type
-    if access_type == "member":
-        member, _ = RbacStore.get_member(int(item.get("id") or 0), user_id)
-        role = str((member or {}).get("role") or "member").strip().lower()
-        if role == PROJECT_ROLE_MANAGER:
-            access = "project_manager"
-        else:
-            access = "member"
-    item["access"] = access
-    item["permissions"] = sorted(perms)
-    item["is_shared"] = access not in ("owner", "admin")
+    del user_id, project_row
+    item["access"] = "owner"
+    item["permissions"] = []
+    item["is_shared"] = False
     return item
 
 

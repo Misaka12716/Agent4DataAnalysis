@@ -15,25 +15,18 @@
 - 默认端口：`52716`
 - 服务版本：`1.1`
 - CORS：`allow_origins=["*"]`，`allow_methods=["*"]`，`allow_headers=["*"]`
-- 鉴权：JWT Bearer Token（详见 [AUTH.md](AUTH.md) 与下文 §1.1）
+- 访问模式：**单用户、无登录**（面向个人/小型局域网部署；所有业务接口无需 `Authorization` 头）
 
-### 1.1 鉴权说明
+### 1.1 单用户说明
 
-除 `/health`、`/auth/send-sms-code`、`/auth/login-with-sms` 外，**所有接口均需登录**。
-
-- 登录成功后响应 `data.access_token`
-- 后续请求携带请求头：`Authorization: Bearer <access_token>`
-- 服务端从 token 解析当前用户，**不再接受**客户端传入的 `user_id`
-- 会话与项目采用 RBAC：所有者、项目成员或平台 admin 可访问（详见 [RBAC.md](RBAC.md)）
+- 初始化脚本会创建默认用户（`users.id=1`），业务层通过 `get_default_user()` 固定使用该用户
+- 工作区路径仍为 `tmp/workspaces/<user_id>/<project_id>/sessions/<session_id>/`
 - 已归档项目（`projects.status=archived`）禁止：新建会话、上传、发起分析
 
 | HTTP 状态 | code | 含义 |
 |---|---|---|
-| 401 | 6 | 未携带 token、token 无效或已过期 |
-| 403 | 3 | 用户已被封禁 |
-| 403 | 7 | token 有效，但 session / project 不属于当前用户且非项目成员 |
 | 403 | 8 | 项目已归档，禁止写操作 |
-| 403 | 9 | 权限不足（缺少对应操作权限码） |
+| 503 | 10 | 默认用户未初始化（需运行 `bash scripts/init-platform.sh`） |
 
 ---
 
@@ -41,45 +34,39 @@
 
 | 接口 | 方法 | 说明 |
 |---|---|---|
-| `/auth/send-sms-code` | `POST` | 发送短信验证码（登录/注册前置步骤，公开） |
-| `/auth/login-with-sms` | `POST` | 短信登录/注册一体：校验后返回 JWT 与用户信息（公开） |
-| `/auth/me` | `GET` | 获取当前登录用户信息（需 Bearer Token） |
-| `/auth/update-username` | `POST` | 修改当前用户姓名/昵称（需 Bearer Token） |
-| `/project/create` | `POST` | 创建项目（需 Bearer Token） |
-| `/project/list` | `GET` | 查询当前用户项目列表（需 Bearer Token） |
-| `/project/{project_id}` | `GET` | 查询项目详情（需 Bearer Token + 项目归属） |
-| `/project/{project_id}` | `PUT` | 重命名项目（需 Bearer Token + 项目归属；个人默认不可改名） |
+| `/project/create` | `POST` | 创建项目 |
+| `/project/list` | `GET` | 查询项目列表 |
+| `/project/{project_id}` | `GET` | 查询项目详情 |
+| `/project/{project_id}` | `PUT` | 重命名项目（个人默认不可改名） |
 | `/project/{project_id}/tree` | `GET` | 查询项目 raw/outputs/archive 目录树 |
-| `/project/{project_id}/archive` | `POST` | 归档项目（需 Bearer Token + 项目归属） |
-| `/project/{project_id}/restore` | `POST` | 恢复项目（需 Bearer Token + 项目归属） |
-| `/project/{project_id}/upload` | `POST` | 上传文件到项目 raw/ 目录（需 Bearer Token + 项目归属） |
-| `/project/{project_id}/assets` | `GET` | 查询项目资产列表（需 Bearer Token + 项目归属） |
-| `/project/{project_id}/sessions` | `GET` | 查询项目下会话列表（需 Bearer Token + 项目归属） |
-| `/session/create` | `POST` | 创建会话：在指定项目下生成 session_id 与工作区（需 Bearer Token + project_id） |
-| `/session/save-title` | `POST` | 保存会话标题：按 session_id 首次写入标题（需 Bearer Token + 会话归属） |
-| `/session/list` | `GET` | 查询可访问会话列表；可选 `?project_id=` 过滤（需 Bearer Token） |
-| `/session/meta` | `GET` | 查询会话元数据（project_id、工作区路径等） |
-| `/session/copy-from-project-raw` | `POST` | 将项目 raw/ 文件复制到会话工作区（分析入口） |
-| `/upload/chunked/init` | `POST` | 分片上传：创建会话（推荐；见 [ChunkedUploadFrontend.md](ChunkedUploadFrontend.md)） |
+| `/project/{project_id}/archive` | `POST` | 归档项目 |
+| `/project/{project_id}/restore` | `POST` | 恢复项目 |
+| `/project/{project_id}/upload` | `POST` | 上传文件到项目 raw/ 目录 |
+| `/project/{project_id}/assets` | `GET` | 查询项目资产列表 |
+| `/project/{project_id}/sessions` | `GET` | 查询项目下会话列表 |
+| `/session/create` | `POST` | 创建会话：在指定项目下生成 session_id 与工作区 |
+| `/session/save-title` | `POST` | 保存会话标题 |
+| `/session/list` | `GET` | 查询会话列表；可选 `?project_id=` 过滤 |
+| `/session/meta` | `GET` | 查询会话元数据 |
+| `/session/copy-from-project-raw` | `POST` | 将项目 raw/ 文件复制到会话工作区 |
+| `/upload/chunked/init` | `POST` | 分片上传：创建上传会话（`target`: `session` / `project_raw`） |
 | `/upload/chunked/{upload_id}/parts/{index}` | `PUT` | 分片上传：写入单个分片 |
 | `/upload/chunked/{upload_id}` | `GET` | 分片上传：状态 / 断点续传 |
 | `/upload/chunked/{upload_id}/complete` | `POST` | 分片上传：合并并落盘 |
 | `/upload/chunked/{upload_id}` | `DELETE` | 分片上传：中止清理 |
-| `/session/upload-excel` | `POST` | 上传文件到会话工作区（**deprecated**，请改用分片协议） |
-| `/session/workspace-file` | `DELETE` | 删除会话工作区单个文件（需 Bearer Token + `data_delete`） |
-| `/session/workspace-tree` | `GET` | 查询会话工作区目录树（需 Bearer Token + 会话归属） |
-| `/session/snapshot` | `GET` | 获取会话内容快照（需 Bearer Token + 会话归属） |
-| `/run-analysis` | `POST` | 发起流式分析任务（需 Bearer Token + 会话归属） |
-| `/run-analysis/reconnect` | `POST` | 断线恢复流（需 Bearer Token + 会话归属） |
-| `/health` | `GET` | 健康检查（公开） |
+| `/session/upload-excel` | `POST` | 上传文件到会话工作区（**deprecated**） |
+| `/session/workspace-file` | `DELETE` | 删除会话工作区单个文件 |
+| `/session/workspace-tree` | `GET` | 查询会话工作区目录树 |
+| `/session/snapshot` | `GET` | 获取会话内容快照 |
+| `/run-analysis` | `POST` | 发起流式分析任务 |
+| `/run-analysis/reconnect` | `POST` | 断线恢复流 |
+| `/health` | `GET` | 健康检查 |
 
 ---
 
 ## 2.1 分片上传（推荐）
 
-大文件请使用统一协议 `/upload/chunked/*`（`target`：`session` / `project_raw` / `resources_*` / `psych_ingest`）。**不含** workbench。
-
-完整契约、前端伪代码、断点续传与迁移清单见 **[ChunkedUploadFrontend.md](ChunkedUploadFrontend.md)**。
+大文件请使用统一协议 `/upload/chunked/*`（`target`：`session` 或 `project_raw`）。
 
 联调可用仓库样例：`tests/fixtures/table/large-dataset.csv`（~10MB）、`tests/fixtures/imaging/患者CT.dcm`（~12MB DICOM）。
 
@@ -88,169 +75,9 @@
 ---
 
 ## 3. 详细接口说明
-### 3.1 发送短信验证码
-- 路径：`POST /auth/send-sms-code`
-- 处理函数：`build_send_sms_code_response(phone)`（`src/backend/auth_service.py`）
-- Content-Type：`application/json`
-- 请求参数（query）：无
-- 请求体参数（JSON）：
-  - `phone: str`（必填，11 位大陆手机号）
-- 请求体示例：
-```json
-{
-  "phone": "18395299120"
-}
-```
-- 成功返回格式：`application/json`
-  - `code: int`（`0` 表示成功）
-  - `msg: str`
-  - `data.phone: str`
-  - `data.expires_in: int`（秒）
-- 成功返回示例（`200`）：
-```json
-{
-  "code": 0,
-  "msg": "SMS code sent successfully",
-  "data": {
-    "phone": "18395299120",
-    "expires_in": 120
-  }
-}
-```
-- 常见错误：
-  - `400`：手机号为空或格式非法（当前按中国大陆手机号 `^1\\d{10}$` 校验）
-  - `502`：短信网关调用失败、网关返回非 JSON、或网关业务返回失败
-- 实现逻辑：
-  1. 校验手机号格式。
-  2. 生成 6 位验证码。
-  3. 按短信平台规则生成签名并调用短信网关（`appId + secretKey + timestamp -> md5(sign)`）。
-  4. 仅在网关返回成功后，将验证码与过期时间缓存在服务内存中（`120s`）。
-  5. 返回 `phone` 与 `expires_in`，不返回验证码明文。
-
----
-
-### 3.2 短信登录（登录/注册一体）
-- 路径：`POST /auth/login-with-sms`
-- 处理函数：`build_login_with_sms_response(phone, code)`（`src/backend/auth_service.py`）
-- Content-Type：`application/json`
-- 请求参数（query）：无
-- 请求体参数（JSON）：
-  - `phone: str`（必填）
-  - `code: str`（必填，短信验证码）
-- 请求体示例：
-```json
-{
-  "phone": "18395299120",
-  "code": "123456"
-}
-```
-- 成功返回格式：`application/json`
-  - `code: int`（`0` 表示成功）
-  - `msg: str`
-  - `data.access_token: str`（JWT，后续请求放入 `Authorization: Bearer`）
-  - `data.token_type: str`（固定为 `bearer`）
-  - `data.expires_in: int`（秒，默认 7 天）
-  - `data.user_id: int`
-  - `data.username: str`
-  - `data.phone: str`
-- 成功返回示例（`200`）：
-```json
-{
-  "code": 0,
-  "msg": "login success",
-  "data": {
-    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-    "token_type": "bearer",
-    "expires_in": 604800,
-    "user_id": 12,
-    "username": "user_8000_1713072000",
-    "phone": "18395299120"
-  }
-}
-```
-- 常见错误：
-  - `400`：手机号为空/格式非法，或 `code` 缺失
-  - `400`：`code=5`，验证码错误或已过期
-  - `403`：用户状态为禁用（兼容 `is_blocked=true` 或 `status in [blocked, disabled, inactive]`）
-  - `500`：数据库查询/写入失败
-- 实现逻辑（当前版本）：
-  1. 校验手机号与验证码参数。
-  2. 在服务内存缓存中校验验证码：需存在该手机号验证码记录、未过期（120 秒）、与请求中的 `code` 一致。
-  3. 查询 `users` 表：查到则直接登录，查不到则自动创建用户后登录。
-  4. 新建用户时自动生成 `username`（`user_<手机号后4位>_<时间戳>`）和占位密码哈希。
-  5. 登录成功后消费验证码（从缓存移除），签发 JWT 并返回用户基础信息。
-
----
-
-### 3.3 获取当前用户信息
-- 路径：`GET /auth/me`
-- 处理函数：`build_me_response(...)`（`src/backend/auth_service.py`）
-- 鉴权：`Authorization: Bearer <access_token>`（必填）
-- 成功返回示例（`200`）：
-```json
-{
-  "code": 0,
-  "msg": "ok",
-  "data": {
-    "user_id": 12,
-    "username": "张三",
-    "phone": "18395299120"
-  }
-}
-```
-- 常见错误：
-  - `401`：`code=6`，未登录或 token 无效/过期
-
----
-
-### 3.4 修改用户姓名/昵称
-- 路径：`POST /auth/update-username`
-- 处理函数：`build_update_username_response(user_id, username)`（`src/backend/auth_service.py`）
-- 鉴权：`Authorization: Bearer <access_token>`（必填）
-- Content-Type：`application/json`
-- 请求体参数（JSON）：
-  - `username: str`（必填，用户姓名/昵称，对应 `users.username`，最长 128 字符）
-- 请求体示例：
-```json
-{
-  "username": "张三"
-}
-```
-- 成功返回格式：`application/json`
-  - `code: int`（`0` 表示成功）
-  - `msg: str`
-  - `data.user_id: int`
-  - `data.username: str`
-- 成功返回示例（`200`）：
-```json
-{
-  "code": 0,
-  "msg": "username updated",
-  "data": {
-    "user_id": 12,
-    "username": "张三"
-  }
-}
-```
-- 常见错误：
-  - `401`：`code=6`，未登录或 token 无效/过期
-  - `400`：`username` 为空/超长
-  - `403`：用户状态为禁用
-  - `409`：`username` 已被其他用户占用
-  - `500`：数据库查询/更新失败
-- 实现逻辑：
-  1. 从 Bearer Token 解析当前 `user_id`。
-  2. 校验 `username` 去空格后非空、长度不超过 128。
-  3. 校验用户未被禁用。
-  4. 若新名称与当前相同，直接返回成功（幂等）。
-  5. 查重并执行 `UPDATE users SET username = ? WHERE id = ?`。
-
----
-
-### 3.5 创建会话
+### 3.1 创建会话
 - 路径：`POST /session/create`
 - 处理函数：`build_create_session_response(user_id, project_id)`
-- 鉴权：`Authorization: Bearer <access_token>`（必填）
 - Content-Type：`application/json`
 - 请求体参数（JSON）：
   - `project_id: int`（**可选**；省略时自动归入该用户的「个人默认」项目 `__personal_default__`）
@@ -282,11 +109,10 @@
 }
 ```
 - 常见错误：
-  - `401`：`code=6`，未登录或 token 无效/过期
   - `403`：`code=8`，项目已归档
   - `500`：数据库写入失败
 - 实现逻辑：
-  1. 从 Bearer Token 解析当前 `user_id`。
+  1. 使用默认用户 `user_id`。
   2. 若未传 `project_id`，自动解析/创建「个人默认」项目。
   3. 校验项目归属且未归档。
   4. 所有新项目（含「个人默认」）统一使用 `.../<project_id>/sessions/<session_id>/` 布局；历史 legacy 路径由 `resolve_workspace_root` 只读兼容，可通过 `scripts/migrate-legacy-sessions.sh` 迁移。
@@ -295,7 +121,6 @@
 
 ### 3.5.1 查询会话元数据
 - 路径：`GET /session/meta`
-- 鉴权：`Authorization: Bearer <access_token>`（必填）
 - 请求参数（query）：
   - `session_id: str`（必填）
 - 成功返回字段（`data`）：
@@ -306,7 +131,6 @@
 
 ### 3.5.2 从项目 raw/ 复制到会话工作区
 - 路径：`POST /session/copy-from-project-raw`
-- 鉴权：Bearer + 会话 `数据上传` 权限
 - 请求体（JSON）：
   - `session_id: str`（必填）
   - `relative_paths: list[str]`（可选；默认复制 `raw/` 下全部文件）
@@ -317,7 +141,6 @@
 ### 3.6 查询用户会话列表
 - 路径：`GET /session/list`
 - 处理函数：`build_user_sessions_response(user_id, project_id?)`
-- 鉴权：`Authorization: Bearer <access_token>`（必填）
 - 请求参数（query）：
   - `project_id: int`（**可选**；传入时仅返回归属该项目的可访问会话）
 - 请求体：无
@@ -355,10 +178,9 @@
 }
 ```
 - 常见错误：
-  - `401`：`code=6`，未登录或 token 无效/过期
   - `500`：数据库查询失败
 - 实现逻辑：
-  1. 从 Bearer Token 解析当前 `user_id`。
+  1. 使用默认用户 `user_id`。
   2. 合并「自己创建的」与「可访问项目内的共享」会话；可选按 `project_id` 过滤。
   3. `GET /project/{id}/sessions` 仍可用，语义等价于 `GET /session/list?project_id={id}`（需项目读权限）。
 
@@ -405,7 +227,6 @@
 }
 ```
 - 常见错误：
-  - `401`：`code=6`，未登录或 token 无效/过期
   - `403`：`code=7`，session 不属于当前用户
   - `400`：`session_id` 为空或 `title` 为空
   - `404`：`session_id` 不存在
@@ -465,7 +286,6 @@ curl -X POST "http://localhost:52716/session/upload-excel" \
 }
 ```
 - 常见错误：
-  - `401`：`code=6`，未登录或 token 无效/过期
   - `403`：`code=7`，session 不属于当前用户
   - `400`：`session_id` 为空
   - `404`：`session_id` 不存在（需先调用 `/session/create`）
@@ -540,7 +360,6 @@ curl -X DELETE "http://localhost:52716/session/workspace-file" \
 }
 ```
 - 常见错误：
-  - `401`：`code=6`，未登录或 token 无效/过期
   - `403`：`code=7`，session 不属于当前用户
   - `404`：`session_id` 不存在（需先调用 `/session/create`）
   - `200` 降级返回：会话存在但内容查询异常时，返回 `content=""`、`version=0`
@@ -613,7 +432,6 @@ curl -X DELETE "http://localhost:52716/session/workspace-file" \
 }
 ```
 - 常见错误：
-  - `401`：`code=6`，未登录或 token 无效/过期
   - `403`：`code=7`，session 不属于当前用户
   - `400`：`session_id` 为空
   - `404`：`session_id` 不存在
@@ -654,7 +472,6 @@ curl -X DELETE "http://localhost:52716/session/workspace-file" \
 data: {"type":"report_chunk","content":"第一部分结论..."}
 ```
 - 常见错误：
-  - `401`：`code=6`，未登录或 token 无效/过期
   - `403`：`code=7`，session 不属于当前用户
   - `404`：`session_id` 不存在（需先调用 `/session/create`）
   - 流中事件 `type=streaming_error` / `type=error`：任务执行异常
@@ -683,7 +500,6 @@ data: {"type":"report_chunk","content":"第一部分结论..."}
 data: {"type":"snapshot","session_id":"...","content":"...","version":35,"timestamp":"2026-04-21 12:00:00"}
 ```
 - 常见错误：
-  - `401`：`code=6`，未登录或 token 无效/过期
   - `403`：`code=7`，session 不属于当前用户
   - `400`：`session_id` 为空
   - `404`：`session_id` 不存在
@@ -819,116 +635,68 @@ data: {"type":"snapshot","session_id":"...","content":"...","version":35,"timest
 - `/session/snapshot`：
   - 读取 `session_content` 最新版本并返回
 - `users`：
-  - 由 `/auth/login-with-sms` 在首次手机号登录时自动写入
-  - 已存在手机号走直接登录，不重复创建
+  - 由 `bash scripts/init-platform.sh` 创建默认用户（`id=1`）
 
 ---
 
 ## 5. 调用示例
-### 5.1 发送短信验证码
-```bash
-curl -X POST "http://localhost:52716/auth/send-sms-code" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "phone": "18395299120"
-  }'
-```
-
-### 5.2 短信登录（自动注册）
-
-登录成功后，从响应 JSON 的 `data.access_token` 取得 token，供后续请求使用。
-
-```bash
-curl -X POST "http://localhost:52716/auth/login-with-sms" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "phone": "18395299120",
-    "code": "123456"
-  }'
-```
-
-### 5.3 获取当前用户
-
-```bash
-curl "http://localhost:52716/auth/me" \
-  -H "Authorization: Bearer <access_token>"
-```
-
-### 5.4 修改用户姓名/昵称
-```bash
-curl -X POST "http://localhost:52716/auth/update-username" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <access_token>" \
-  -d '{
-    "username": "张三"
-  }'
-```
-
-### 5.5 创建项目
+### 5.1 创建项目
 ```bash
 curl -X POST "http://localhost:52716/project/create" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <access_token>" \
   -d '{"name": "Q1 分析项目"}'
 ```
 
-### 5.6 创建会话（需 project_id）
+### 5.2 创建会话（需 project_id）
 ```bash
 curl -X POST "http://localhost:52716/session/create" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <access_token>" \
   -d '{"project_id": 1}'
 ```
 
-### 5.7 查询用户会话列表
+### 5.3 查询会话列表
 ```bash
-curl "http://localhost:52716/session/list" \
-  -H "Authorization: Bearer <access_token>"
+curl "http://localhost:52716/session/list"
 ```
 
-### 5.8 保存会话标题
+### 5.4 保存会话标题
 ```bash
 curl -X POST "http://localhost:52716/session/save-title" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <access_token>" \
   -d '{
     "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
     "title": "Q1 销售分析"
   }'
 ```
 
-### 5.9 上传数据文件
+### 5.5 上传数据文件
 ```bash
 curl -X POST "http://localhost:52716/session/upload-excel" \
-  -H "Authorization: Bearer <access_token>" \
   -F "file=@./demo.xlsx" \
   -F "session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 ```
 
-### 5.9 查询快照
+### 5.6 查询快照
 ```bash
-curl "http://localhost:52716/session/snapshot?session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73" \
-  -H "Authorization: Bearer <access_token>"
+curl "http://localhost:52716/session/snapshot?session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 ```
 
-### 5.10 查询会话工作区目录树
+### 5.7 查询会话工作区目录树
 ```bash
-curl "http://localhost:52716/session/workspace-tree?session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73" \
-  -H "Authorization: Bearer <access_token>"
+curl "http://localhost:52716/session/workspace-tree?session_id=9e9f3f2f-5978-4b31-a57f-95b0e6478b73"
 ```
 
-### 5.11 发起流式分析
+### 5.8 发起流式分析
 ```bash
 curl -N -X POST "http://localhost:52716/run-analysis" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <access_token>" \
   -d '{
     "session_id": "9e9f3f2f-5978-4b31-a57f-95b0e6478b73",
     "input_data": "请对工作区目录下的数据做统计分析并给出结论。"
   }'
 ```
 
-### 5.12 健康检查
+### 5.9 健康检查
 ```bash
 curl http://localhost:52716/health
 ```
@@ -938,9 +706,7 @@ curl http://localhost:52716/health
 ## 6. 说明与注意事项
 
 - 上传接口在接口层校验扩展名，仅允许 Reader 可深度解析的 table/image/text 类型（见 §3.8）；大小限制为 `2048MB`，请同时确认反向代理（如 Nginx）配置一致。
-- 除公开接口外，所有 API 需携带 `Authorization: Bearer <access_token>`；生产环境务必设置 `JWT_SECRET_KEY`（见 [AUTH.md](AUTH.md)）。
+- 本平台为单用户无登录模式，请勿将服务端口暴露到公网。
 - SSE 是持续连接，前端需按流式协议处理 `data:` 行。
-- 会话内容按“完整累计文本”落库，体量较大时可考虑后续改为增量片段存储策略。
-- 短信验证码存储在服务内存中，服务重启后验证码会丢失；如需多实例部署，建议迁移到 Redis 等集中缓存。
 - **执行 Runtime**：默认本地（`CUBE_SANDBOX_ENABLED=0`）。Worker 通过 `RUNNER_PYTHON`（须满足 [`requirements-runner.txt`](../requirements-runner.txt)）执行 Agent 生成的 Python，与 FastAPI 主环境隔离。详见 [`StartInstruction.md`](StartInstruction.md)。
 - **Cube Sandbox（可选）**：`CUBE_SANDBOX_ENABLED=1` 时 factory 尝试沙箱后端；Cube 不可用时自动降级本地 Runtime。部署与排查见 [`Cubesandbox-agent-integration.md`](Cubesandbox-agent-integration.md)。

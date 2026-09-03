@@ -19,21 +19,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.api_models import (
     StreamingTaskRequest,
     ReconnectStreamRequest,
-    SendSmsCodeRequest,
-    LoginWithSmsRequest,
-    UpdateUsernameRequest,
     SaveSessionTitleRequest,
     CreateSessionRequest,
     CopyProjectRawRequest,
     DeleteSessionFileRequest,
 )
-from backend.auth_service import (
-    build_send_sms_code_response,
-    build_login_with_sms_response,
-    build_update_username_response,
-    build_me_response,
-)
-from backend.jwt_auth import CurrentUser, get_current_user
+from backend.current_user import CurrentUser, get_default_user
 from backend.route_services import (
     build_health_response,
     handle_session_upload_excel,
@@ -80,7 +71,7 @@ async def health_check():
 @app.post("/session/create")
 async def create_session(
     body: CreateSessionRequest,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_default_user),
 ):
     return build_create_session_response(current_user.user_id, body.project_id)
 
@@ -88,7 +79,7 @@ async def create_session(
 @app.get("/session/list")
 async def list_user_sessions(
     project_id: int | None = None,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_default_user),
 ):
     return build_user_sessions_response(current_user.user_id, project_id=project_id)
 
@@ -96,7 +87,7 @@ async def list_user_sessions(
 @app.get("/session/meta")
 async def session_meta(
     session_id: str,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_default_user),
 ):
     return build_session_meta_response(session_id, current_user.user_id)
 
@@ -104,7 +95,7 @@ async def session_meta(
 @app.post("/session/copy-from-project-raw")
 async def session_copy_from_project_raw(
     body: CopyProjectRawRequest,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_default_user),
 ):
     return build_copy_project_raw_to_session_response(
         body.session_id,
@@ -116,7 +107,7 @@ async def session_copy_from_project_raw(
 @app.post("/session/save-title")
 async def save_session_title(
     body: SaveSessionTitleRequest,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_default_user),
 ):
     return build_save_session_title_response(
         body.session_id,
@@ -129,7 +120,7 @@ async def save_session_title(
 async def session_upload_excel(
     file: UploadFile = File(...),
     session_id: str = Form(...),
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_default_user),
 ):
     return await handle_session_upload_excel(file, session_id, current_user.user_id)
 
@@ -137,7 +128,7 @@ async def session_upload_excel(
 @app.delete("/session/workspace-file")
 async def session_delete_workspace_file(
     body: DeleteSessionFileRequest,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_default_user),
 ):
     return handle_session_delete_file(
         body.session_id,
@@ -149,7 +140,7 @@ async def session_delete_workspace_file(
 @app.get("/session/snapshot")
 async def session_snapshot(
     session_id: str,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_default_user),
 ):
     return build_session_snapshot_response(session_id, current_user.user_id)
 
@@ -157,7 +148,7 @@ async def session_snapshot(
 @app.get("/session/workspace-tree")
 async def session_workspace_tree(
     session_id: str,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_default_user),
 ):
     return build_session_workspace_tree_response(session_id, current_user.user_id)
 
@@ -165,7 +156,7 @@ async def session_workspace_tree(
 @app.post("/run-analysis")
 async def run_analysis(
     body: StreamingTaskRequest,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_default_user),
 ):
     return build_run_analysis_response(body, current_user.user_id)
 
@@ -173,43 +164,16 @@ async def run_analysis(
 @app.post("/run-analysis/reconnect")
 async def reconnect_analysis_stream(
     body: ReconnectStreamRequest,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_default_user),
 ):
     return build_reconnect_analysis_response(body.session_id, current_user.user_id)
 
 
-@app.post("/auth/send-sms-code")
-async def send_sms_code(body: SendSmsCodeRequest):
-    return build_send_sms_code_response(body.phone.strip())
-
-
-@app.post("/auth/login-with-sms")
-async def login_with_sms(body: LoginWithSmsRequest):
-    return build_login_with_sms_response(body.phone.strip(), body.code.strip())
-
-
-@app.get("/auth/me")
-async def auth_me(current_user: CurrentUser = Depends(get_current_user)):
-    return build_me_response(
-        current_user.user_id,
-        current_user.username,
-        current_user.phone,
-    )
-
-
-@app.post("/auth/update-username")
-async def update_username(
-    body: UpdateUsernameRequest,
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    return build_update_username_response(current_user.user_id, body.username.strip())
-
-
-from backend.access_log_filter import install_access_log_filters
 from backend.route_registry import register_modular_routes
+from backend.frontend_static import register_frontend_static
 
 register_modular_routes(app)
-install_access_log_filters()
+register_frontend_static(app)
 
 # -------------------------- 启动服务器 --------------------------
 if __name__ == "__main__":

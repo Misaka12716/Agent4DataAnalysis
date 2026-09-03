@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 查看 AgentPlatform 后端 / 联调前端运行状态
+# 查看 AgentPlatform 后端运行状态
 # 用法: bash scripts/status.sh
 
 set -euo pipefail
@@ -9,7 +9,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 BACKEND_PORT="$(ap_backend_port)"
-FRONTEND_PORT="$(ap_frontend_port)"
 LOG_DIR="$(ap_log_dir)"
 
 echo "=== AgentPlatform 服务状态 ==="
@@ -29,14 +28,5 @@ else
 fi
 
 echo ""
-echo "[联调前端] 端口 ${FRONTEND_PORT}"
-if ap_frontend_pgrep | grep -q .; then
-  ap_frontend_pgrep | sed 's/^/  /'
-else
-  echo "  未运行"
-fi
-
-echo ""
 echo "[日志]"
 echo "  后端: ${LOG_DIR}/backend.log"
-echo "  前端: ${LOG_DIR}/frontend.log"

@@ -19,7 +19,7 @@ from backend.project_auth import (
     assert_session_project_not_archived,
 )
 from backend.project_asset_registry import register_upload, relative_path_for_project_asset
-from configs.config import LANGUAGE, RESOURCES_MAX_UPLOAD_MB
+from configs.config import LANGUAGE
 from db.rbac_schema import PERM_DATA_UPLOAD
 from reader.file_types import classify_file, is_upload_allowed, upload_allowed_extensions
 from runtime.factory import ensure_runtime
@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 SESSION_MAX_FILE_SIZE = 2048 * 1024 * 1024
 PROJECT_MAX_FILE_SIZE = 2048 * 1024 * 1024
-PSYCH_MAX_FILE_SIZE = 200 * 1024 * 1024
 
 
 def _param_int(params: Dict[str, Any], key: str) -> Optional[int]:
@@ -98,71 +97,6 @@ def validate_init_target(
                 status_code=413,
                 detail=f"文件过大（最大 {PROJECT_MAX_FILE_SIZE // (1024 * 1024)}MB）",
             )
-        return
-
-    if target in ("resources_file", "resources_dataset", "resources_dataset_version"):
-        from backend.resource_classify import is_resource_upload_allowed
-
-        probe = safe_filename(original_basename(filename))
-        if not is_resource_upload_allowed(probe):
-            raise HTTPException(status_code=415, detail=f"不允许上传的文件类型: {probe}")
-        max_bytes = RESOURCES_MAX_UPLOAD_MB * 1024 * 1024
-        if size > max_bytes:
-            raise HTTPException(
-                status_code=413,
-                detail=f"文件超过大小限制 {RESOURCES_MAX_UPLOAD_MB}MB",
-            )
-        if target == "resources_file":
-            parent_id = _param_int(params, "parent_id")
-            from backend.resource_file_service import _validate_parent
-
-            verr = _validate_parent(user_id, parent_id)
-            if verr:
-                raise HTTPException(status_code=400, detail=verr)
-        elif target == "resources_dataset_version":
-            dataset_id = _param_int(params, "dataset_id")
-            if dataset_id is None:
-                raise HTTPException(status_code=400, detail="target_params.dataset_id 不能为空")
-            from db import resource_store as store
-
-            ds, err = store.get_dataset(user_id, dataset_id)
-            if err:
-                raise HTTPException(status_code=400, detail=err)
-            if not ds:
-                raise HTTPException(status_code=404, detail="数据集不存在")
-            if ds.get("status") == "archived":
-                raise HTTPException(status_code=400, detail="已归档数据集不可上传新版本，请先恢复")
-        return
-
-    if target == "resources_model":
-        model_name = (_param_str(params, "model_name") or "").strip()
-        if not model_name:
-            raise HTTPException(status_code=400, detail="target_params.model_name 不能为空")
-        safe = safe_filename(filename, fallback="model.pkl")
-        ext = os.path.splitext(safe)[1].lower()
-        if ext not in (".pkl", ".joblib"):
-            raise HTTPException(status_code=415, detail="仅支持 .pkl / .joblib 模型文件")
-        max_bytes = RESOURCES_MAX_UPLOAD_MB * 1024 * 1024
-        if size > max_bytes:
-            raise HTTPException(
-                status_code=413,
-                detail=f"文件超过大小限制 {RESOURCES_MAX_UPLOAD_MB}MB",
-            )
-        return
-
-    if target == "psych_ingest":
-        dataset_id = _param_int(params, "dataset_id")
-        if dataset_id is None:
-            raise HTTPException(status_code=400, detail="target_params.dataset_id 不能为空")
-        if size > PSYCH_MAX_FILE_SIZE:
-            raise HTTPException(status_code=413, detail="上传文件不能超过 200 MB")
-        from backend.psych_data_service import get_dataset
-
-        row, err = get_dataset(dataset_id, user_id)
-        if err:
-            raise HTTPException(status_code=404 if "不存在" in err else 400, detail=err)
-        if not row:
-            raise HTTPException(status_code=404, detail="数据集不存在")
         return
 
     raise HTTPException(status_code=400, detail=f"不支持的 target: {target}")
@@ -300,113 +234,9 @@ def finalize_project_raw(
     )
 
 
-def _read_bytes(path: str) -> bytes:
-    with open(path, "rb") as f:
-        return f.read()
-
-
-def finalize_resources_file(
-    user_id: int, filename: str, merged_path: str, params: Dict[str, Any]
-) -> JSONResponse:
-    from backend.resource_file_service import upload_file
-
-    parent_id = _param_int(params, "parent_id")
-    data, err = upload_file(
-        user_id,
-        filename,
-        _read_bytes(merged_path),
-        parent_id=parent_id,
-    )
-    if err:
-        raise HTTPException(status_code=400, detail=err)
-    return JSONResponse(content={"status": "success", "data": data}, status_code=201)
-
-
-def finalize_resources_dataset(
-    user_id: int, filename: str, merged_path: str, params: Dict[str, Any]
-) -> JSONResponse:
-    from backend.resource_dataset_service import create_from_upload
-
-    data, err = create_from_upload(
-        user_id,
-        filename,
-        _read_bytes(merged_path),
-        name=_param_str(params, "name"),
-        description=_param_str(params, "description"),
-    )
-    if err:
-        raise HTTPException(status_code=400, detail=err)
-    return JSONResponse(content={"status": "success", "data": data}, status_code=201)
-
-
-def finalize_resources_dataset_version(
-    user_id: int, filename: str, merged_path: str, params: Dict[str, Any]
-) -> JSONResponse:
-    from backend.resource_dataset_service import add_version
-
-    dataset_id = _param_int(params, "dataset_id")
-    assert dataset_id is not None
-    data, err = add_version(
-        user_id,
-        dataset_id,
-        filename,
-        _read_bytes(merged_path),
-        note=_param_str(params, "note"),
-    )
-    if err:
-        raise HTTPException(status_code=400, detail=err)
-    return JSONResponse(content={"status": "success", "data": data}, status_code=201)
-
-
-def finalize_resources_model(
-    user_id: int, filename: str, merged_path: str, params: Dict[str, Any]
-) -> JSONResponse:
-    from backend.model_registry_service import upload_model
-
-    data, err = upload_model(
-        user_id,
-        filename,
-        _read_bytes(merged_path),
-        model_name=(_param_str(params, "model_name") or "").strip(),
-        model_type=_param_str(params, "model_type"),
-        task_type=_param_str(params, "task_type"),
-        features=params.get("features"),
-        metrics=params.get("metrics"),
-        params=params.get("params"),
-    )
-    if err:
-        raise HTTPException(status_code=400, detail=err)
-    return JSONResponse(content={"status": "success", "data": data}, status_code=201)
-
-
-def finalize_psych_ingest(
-    user_id: int, filename: str, merged_path: str, params: Dict[str, Any]
-) -> JSONResponse:
-    from backend.psych_data_service import ingest_file
-
-    dataset_id = _param_int(params, "dataset_id")
-    assert dataset_id is not None
-    data, err = ingest_file(
-        user_id,
-        dataset_id,
-        filename,
-        _read_bytes(merged_path),
-        record_type=_param_str(params, "record_type", "row") or "row",
-        patient_key_col=_param_str(params, "patient_key_col"),
-    )
-    if err:
-        raise HTTPException(status_code=400, detail=err)
-    return JSONResponse(content={"status": "success", "data": data}, status_code=201)
-
-
 _FINALIZERS = {
     "session": finalize_session,
     "project_raw": finalize_project_raw,
-    "resources_file": finalize_resources_file,
-    "resources_dataset": finalize_resources_dataset,
-    "resources_dataset_version": finalize_resources_dataset_version,
-    "resources_model": finalize_resources_model,
-    "psych_ingest": finalize_psych_ingest,
 }
 
 

@@ -1,4 +1,4 @@
-"""分片上传：服务层单测 + session / resources_file 路由冒烟。"""
+"""分片上传：服务层单测 + session 路由冒烟。"""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.chunked_upload_routes import register_chunked_upload_routes
+from backend.current_user import CurrentUser, get_default_user
 from backend.chunked_upload_service import (
     MIN_CHUNK_SIZE,
     UPLOAD_TTL_SECONDS,
@@ -30,12 +31,13 @@ from backend.chunked_upload_service import (
     merge_parts,
     put_part,
 )
-from backend.jwt_auth import create_access_token
 from runtime.factory import clear_runtime_cache
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 LARGE_CSV = FIXTURES / "table" / "large-dataset.csv"
 PATIENT_DCM = FIXTURES / "imaging" / "患者CT.dcm"
+
+_TEST_USER = CurrentUser(user_id=10, username="tester", phone="", platform_role="user")
 
 
 @pytest.fixture
@@ -47,25 +49,6 @@ def chunk_tmp(tmp_path, monkeypatch):
     return tmp_path
 
 
-@pytest.fixture
-def auth_headers():
-    token, _ = create_access_token(10, "tester", "13800138000")
-    return {"Authorization": f"Bearer {token}"}
-
-
-@pytest.fixture
-def mock_rbac_user():
-    user_row = {
-        "id": 10,
-        "username": "tester",
-        "phone": "13800138000",
-        "platform_role": "user",
-        "status": "active",
-    }
-    with patch("db.rbac_store.RbacStore.get_user", return_value=(user_row, None)):
-        yield user_row
-
-
 def test_init_put_merge_happy_path(chunk_tmp):
     payload, err, code = init_upload(
         10,
@@ -75,25 +58,20 @@ def test_init_put_merge_happy_path(chunk_tmp):
         target_params={"session_id": "sid-1"},
         chunk_size=5,
     )
-    # chunk_size clamped to >= 1MB; with size=12 → 1 chunk
     assert err is None and code is None
     assert payload["total_chunks"] == 1
     upload_id = payload["upload_id"]
-    cs = payload["chunk_size"]
 
-    # recreate with size matching one small chunk by using exact size == chunk after clamp
-    # Use multi-chunk with larger size
-    data = b"abcdefghij"  # 10 bytes — still 1 chunk at 1MB min
+    data = b"abcdefghij"
     part, err, code = put_part(10, upload_id, 0, data)
-    # size was 12, so expected part size is 12
-    assert err is not None  # size mismatch
+    assert err is not None
 
     payload2, err, code = init_upload(
         10,
         filename="demo.csv",
         size=10,
-        target="resources_file",
-        target_params={},
+        target="session",
+        target_params={"session_id": "sid-2"},
         chunk_size=1024 * 1024,
     )
     assert err is None
@@ -103,7 +81,6 @@ def test_init_put_merge_happy_path(chunk_tmp):
     assert err is None
     assert part["received"] is True
 
-    # idempotent re-put
     part2, err, code = put_part(10, uid, 0, body)
     assert err is None
 
@@ -155,8 +132,8 @@ def test_init_upload_allows_table_extensions(chunk_tmp, filename):
         2,
         filename=filename,
         size=16,
-        target="resources_file",
-        target_params={},
+        target="session",
+        target_params={"session_id": "sid-table"},
     )
     assert err is None and code is None
     assert payload["upload_id"]
@@ -180,8 +157,8 @@ def test_init_upload_allows_text_extensions(chunk_tmp, filename):
         2,
         filename=filename,
         size=16,
-        target="resources_file",
-        target_params={},
+        target="session",
+        target_params={"session_id": "sid-text"},
     )
     assert err is None and code is None
     assert payload["upload_id"]
@@ -207,8 +184,8 @@ def test_cleanup_expired(chunk_tmp):
         3,
         filename="old.csv",
         size=5,
-        target="resources_file",
-        target_params={},
+        target="session",
+        target_params={"session_id": "sid-old"},
     )
     assert err is None
     uid = payload["upload_id"]
@@ -233,8 +210,8 @@ def test_abort_upload(chunk_tmp):
         4,
         filename="x.csv",
         size=3,
-        target="resources_file",
-        target_params={},
+        target="session",
+        target_params={"session_id": "sid-abort"},
     )
     uid = payload["upload_id"]
     out, err, code = abort_upload(4, uid)
@@ -247,11 +224,12 @@ def test_abort_upload(chunk_tmp):
 def _make_app() -> FastAPI:
     app = FastAPI()
     register_chunked_upload_routes(app)
+    app.dependency_overrides[get_default_user] = lambda: _TEST_USER
     return app
 
 
 @pytest.fixture
-def client(chunk_tmp, isolated_workspaces, mock_rbac_user, monkeypatch):
+def client(chunk_tmp, isolated_workspaces, monkeypatch):
     monkeypatch.setattr("backend.chunked_upload_service.TEMP_FOLDER", str(chunk_tmp) + os.sep)
     yield TestClient(_make_app())
 
@@ -294,19 +272,6 @@ def patch_session_access(session_workspace):
             "backend.chunked_upload_finalize.resolve_project_root",
             return_value=str(_project_root),
         ),
-        patch(
-            "backend.permission_service.get_effective_project_permissions",
-            return_value=(
-                {
-                    "data_upload",
-                    "data_delete",
-                    "data_download",
-                    "analysis_create",
-                },
-                "owner",
-                None,
-            ),
-        ),
         patch("backend.route_services._schedule_workspace_snapshot", MagicMock()),
         patch("backend.chunked_upload_finalize.register_upload", MagicMock()),
         patch(
@@ -326,11 +291,10 @@ def patch_session_access(session_workspace):
     clear_runtime_cache("sid-chunk")
 
 
-def test_session_chunked_flow_via_api(client, auth_headers, patch_session_access):
+def test_session_chunked_flow_via_api(client, patch_session_access):
     content = b"col1,col2\n1,2\n3,4\n"
     init = client.post(
         "/upload/chunked/init",
-        headers=auth_headers,
         json={
             "filename": "demo.csv",
             "size": len(content),
@@ -344,16 +308,15 @@ def test_session_chunked_flow_via_api(client, auth_headers, patch_session_access
 
     put = client.put(
         f"/upload/chunked/{upload_id}/parts/0",
-        headers=auth_headers,
         files={"chunk": ("part0", io.BytesIO(content), "application/octet-stream")},
     )
     assert put.status_code == 200, put.text
 
-    status = client.get(f"/upload/chunked/{upload_id}", headers=auth_headers)
+    status = client.get(f"/upload/chunked/{upload_id}")
     assert status.status_code == 200
     assert status.json()["data"]["missing_parts"] == []
 
-    complete = client.post(f"/upload/chunked/{upload_id}/complete", headers=auth_headers)
+    complete = client.post(f"/upload/chunked/{upload_id}/complete")
     assert complete.status_code == 200, complete.text
     body = complete.json()
     assert body["status"] == "success"
@@ -363,58 +326,28 @@ def test_session_chunked_flow_via_api(client, auth_headers, patch_session_access
     assert (patch_session_access / "demo.csv").read_bytes() == content
 
 
-def test_resources_file_chunked_smoke(client, auth_headers, monkeypatch):
-    content = b"a,b\n1,2\n"
-    monkeypatch.setattr(
-        "backend.chunked_upload_finalize.is_resource_upload_allowed"
-        if False
-        else "backend.resource_classify.is_resource_upload_allowed",
-        lambda name: True,
-    )
-    # validate_init imports inside function — patch resource_classify
-    with patch(
-        "backend.resource_classify.is_resource_upload_allowed", return_value=True
-    ), patch(
-        "backend.resource_file_service.upload_file",
-        return_value=({"id": 99, "name": "t.csv"}, None),
-    ):
-        init = client.post(
-            "/upload/chunked/init",
-            headers=auth_headers,
-            json={
-                "filename": "t.csv",
-                "size": len(content),
-                "target": "resources_file",
-                "target_params": {},
-            },
-        )
-        assert init.status_code == 201, init.text
-        upload_id = init.json()["data"]["upload_id"]
-        put = client.put(
-            f"/upload/chunked/{upload_id}/parts/0",
-            headers=auth_headers,
-            files={"chunk": ("p0", io.BytesIO(content), "application/octet-stream")},
-        )
-        assert put.status_code == 200, put.text
-        complete = client.post(
-            f"/upload/chunked/{upload_id}/complete", headers=auth_headers
-        )
-        assert complete.status_code == 201, complete.text
-        body = complete.json()
-        assert body["status"] == "success"
-        assert body["data"]["id"] == 99
-        assert body["upload_id"] == upload_id
 
-
-def test_init_rejects_workbench_target(client, auth_headers):
+def test_init_rejects_unknown_target(client):
     resp = client.post(
         "/upload/chunked/init",
-        headers=auth_headers,
         json={
             "filename": "a.csv",
             "size": 10,
             "target": "workbench",
             "target_params": {"session_id": "wb_x"},
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_init_rejects_resources_target(client):
+    resp = client.post(
+        "/upload/chunked/init",
+        json={
+            "filename": "a.csv",
+            "size": 10,
+            "target": "resources_file",
+            "target_params": {},
         },
     )
     assert resp.status_code == 400
@@ -428,8 +361,8 @@ def test_merge_large_dataset_fixture_multi_chunk(chunk_tmp):
         11,
         filename="large-dataset.csv",
         size=size,
-        target="resources_file",
-        target_params={},
+        target="session",
+        target_params={"session_id": "sid-large"},
         chunk_size=chunk_size,
     )
     assert err is None and code is None
@@ -469,8 +402,8 @@ def test_init_chinese_dicom_filename(chunk_tmp):
         12,
         filename="患者CT.dcm",
         size=size,
-        target="resources_file",
-        target_params={},
+        target="session",
+        target_params={"session_id": "sid-dcm"},
         chunk_size=MIN_CHUNK_SIZE,
     )
     assert err is None and code is None

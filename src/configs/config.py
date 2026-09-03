@@ -15,16 +15,13 @@ except ImportError:
 # --------------------------
 # 通用路径配置
 # --------------------------
-PATH = "/data1/pjw/AgentPlatform/src"  # 文件夹的固定位置
-TEMP_FOLDER = "/data1/pjw/AgentPlatform/tmp/"  # 临时文件存储路径
-UPLOAD_FOLDER = os.path.join(TEMP_FOLDER, "uploads/")  # 上传文件存储路径
-DOWNLOAD_FOLDER = os.path.join(TEMP_FOLDER, "downloads/")  # 下载文件存储路径
-
-# 个人资源管理（文件空间 / 数据集 / 模型库）
-RESOURCES_ROOT = os.getenv("RESOURCES_ROOT", os.path.join(TEMP_FOLDER, "resources"))
-RESOURCES_MAX_UPLOAD_MB = int(os.getenv("RESOURCES_MAX_UPLOAD_MB", "2048"))
-RESOURCES_PREVIEW_ROWS = int(os.getenv("RESOURCES_PREVIEW_ROWS", "50"))
-RESOURCES_PREDICT_MAX_ROWS = int(os.getenv("RESOURCES_PREDICT_MAX_ROWS", "5000"))
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+PATH = str(_REPO_ROOT / "src")
+TEMP_FOLDER = os.getenv("TEMP_FOLDER", str(_REPO_ROOT / "tmp"))
+if not TEMP_FOLDER.endswith(os.sep):
+    TEMP_FOLDER = TEMP_FOLDER + os.sep
+UPLOAD_FOLDER = os.path.join(TEMP_FOLDER, "uploads/")
+DOWNLOAD_FOLDER = os.path.join(TEMP_FOLDER, "downloads/")
 
 # --------------------------
 # 模型相关配置（部署与分工见 docs/Models.md）
@@ -47,8 +44,6 @@ DEFAULT_ORCHESTRATOR_MODEL = os.getenv("DEFAULT_ORCHESTRATOR_MODEL", DEFAULT_MOD
 # Reader 智能体：文件摘要与可选 Vision
 DEFAULT_READER_MODEL = os.getenv("DEFAULT_READER_MODEL", DEFAULT_MODEL)
 DEFAULT_VISION_MODEL = os.getenv("DEFAULT_VISION_MODEL", VISION_MODEL)
-# 临床报告润色（默认与通用文本相同）
-CLINICAL_REPORT_MODEL = os.getenv("CLINICAL_REPORT_MODEL", DEFAULT_MODEL)
 READER_TABLE_SAMPLE_ROWS = int(os.getenv("READER_TABLE_SAMPLE_ROWS", "5"))
 READER_TEXT_PREVIEW_CHARS = int(os.getenv("READER_TEXT_PREVIEW_CHARS", "4000"))
 READER_ENABLE_LLM_TABLE_HEADER = os.getenv("READER_ENABLE_LLM_TABLE_HEADER", "0") == "1"
@@ -85,20 +80,13 @@ WORKSPACE_ROOT = "."
 ENABLE_MODEL_LOG: bool = True
 
 # --------------------------
-# JWT 鉴权配置
-# --------------------------
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "168"))
-
-# --------------------------
 # API 相关配置（主键：OPENAI_API_*；旧名 API_KEY / OPENAI_COMPATIBLE_API_BASE 为兼容别名）
 # --------------------------
 API_KEY = os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY") or ""
 OPENAI_COMPATIBLE_API_BASE = (
     os.getenv("OPENAI_COMPATIBLE_API_BASE")
     or os.getenv("OPENAI_API_BASE")
-    or "http://192.168.4.110:12716/v1"
+    or "http://localhost:11434/v1"
 )
 WORKFLOW_API_BASE = os.getenv("WORKFLOW_API_BASE", "162.105.89.4/workflow/api/")
 

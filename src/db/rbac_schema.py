@@ -1,6 +1,8 @@
 # db/rbac_schema.py
 # 角色与权限表结构定义
 
+from __future__ import annotations
+
 from typing import Any, List, Optional, TypedDict
 
 TABLE_PROJECT_MEMBERS = "project_members"

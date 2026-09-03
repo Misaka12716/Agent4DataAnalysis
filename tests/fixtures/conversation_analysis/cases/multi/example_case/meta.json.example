@@ -1,5 +1,0 @@
-{
-  "name": "多文件组合示例（请改名为 meta.json 并放入真实数据）",
-  "files": ["table_a.csv", "table_b.csv"],
-  "prompt": null
-}

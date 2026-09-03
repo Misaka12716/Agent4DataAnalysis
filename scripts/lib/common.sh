@@ -154,10 +154,9 @@ ap_run_backend() {
   port="${1:-$(ap_backend_port)}"
   bind_host="${AP_BIND_HOST:-0.0.0.0}"
   root="$(ap_root)"
-  export ACCEPTANCE_MODE="${ACCEPTANCE_MODE:-0}"
   ap_activate_conda
   cd "${root}/src"
-  echo "[ap] 启动后端 http://${bind_host}:${port} (ACCEPTANCE_MODE=${ACCEPTANCE_MODE})"
+  echo "[ap] 启动后端 http://${bind_host}:${port}"
   exec python3 -m uvicorn backend.server:app --host "${bind_host}" --port "${port}"
 }
 
